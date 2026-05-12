@@ -33,7 +33,9 @@ Accept: application/json, text/event-stream
 MCP-Protocol-Version: 2025-06-18
 ```
 
-The server returns `application/json` responses. It does not currently open server-to-client SSE streams, so `GET /mcp` and `DELETE /mcp` return `405 Method Not Allowed`.
+The server returns `application/json` responses. It does not currently open server-to-client SSE streams, so authenticated `GET /mcp` and `DELETE /mcp` requests return `405 Method Not Allowed`.
+
+If a request includes an unsupported `MCP-Protocol-Version` header, the server returns HTTP `400 Bad Request`. Requests without the header are still accepted for compatibility with simpler clients and initialization probes.
 
 ## Authentication
 
