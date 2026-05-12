@@ -4,6 +4,8 @@
 
 ACCWeb MCP is a fork of [assetto-corsa-web/accweb](https://github.com/assetto-corsa-web/accweb) for managing Assetto Corsa Competizione servers through a web UI, Docker Compose, and a token-protected MCP HTTP endpoint. The fork keeps the original ACCWeb workflow, adds container-first deployment, and gives MCP clients a structured way to read and change ACC Dedicated Server configuration.
 
+Russian documentation: [README.ru.md](README.ru.md).
+
 ## What this fork adds
 
 * a Docker image with ACCWeb plus Wine for running `accServer.exe` on Linux
@@ -133,6 +135,7 @@ curl -s http://SERVER_IP:8080/mcp \
 ```
 
 See [docs/mcp.md](docs/mcp.md) for configuration, examples, weather/time changes, and multi-session updates.
+See [docs/env.ru.md](docs/env.ru.md) for a detailed Russian environment variable reference.
 
 ## Docker development
 

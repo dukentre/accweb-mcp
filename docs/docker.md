@@ -63,6 +63,8 @@ ACCWEB_MCP_TOKEN=change-this-long-random-token
 ACCSERVER_HOST_PATH=/opt/accweb-mcp/accserver
 ```
 
+Detailed Russian env reference: [env.ru.md](env.ru.md).
+
 Start:
 
 ```sh
