@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/assetto-corsa-web/accweb/internal/pkg/cfg"
+	"github.com/assetto-corsa-web/accweb/internal/pkg/instance"
 	"github.com/assetto-corsa-web/accweb/internal/pkg/server_manager"
 	"github.com/gin-gonic/gin"
 )
@@ -81,8 +85,11 @@ func TestMCPToolsListAnnotatesReadOnlyTools(t *testing.T) {
 	}
 
 	expectedReadOnly := map[string]bool{
-		"list_instances":      true,
-		"get_instance_config": true,
+		"list_instances":       true,
+		"get_instance_status":  true,
+		"get_instance_weather": true,
+		"get_instance_track":   true,
+		"get_instance_config":  true,
 	}
 
 	for _, tool := range tools {
@@ -100,6 +107,22 @@ func TestMCPToolsListAnnotatesReadOnlyTools(t *testing.T) {
 		}
 		if openWorld {
 			t.Fatalf("%s openWorldHint must be false because ACCWeb tools operate on local server instances", tool.Name)
+		}
+	}
+}
+
+func TestMCPToolsListProvidesOutputSchemas(t *testing.T) {
+	var h Handler
+	result := h.mcpToolsList()
+
+	tools, ok := result["tools"].([]mcpTool)
+	if !ok {
+		t.Fatalf("tools/list result must contain []mcpTool, got %T", result["tools"])
+	}
+
+	for _, tool := range tools {
+		if got := tool.OutputSchema["type"]; got != "object" {
+			t.Fatalf("%s outputSchema.type must be object, got %#v", tool.Name, got)
 		}
 	}
 }
@@ -192,6 +215,151 @@ func TestMCPToolExecutionErrorsUseToolResultShape(t *testing.T) {
 	}
 }
 
+func TestMCPDomainToolsReturnStructuredWeatherAndTrack(t *testing.T) {
+	h := newMCPTestHandlerWithInstances(t, testInstanceSpec{
+		id:            "1778596425",
+		name:          "Dukentre SERVER",
+		track:         "monza",
+		ambientTemp:   26,
+		cloudLevel:    0.1,
+		rain:          0,
+		randomness:    2,
+		adminPass:     "228339227",
+		serverPass:    "server-secret",
+		spectatorPass: "spectator-secret",
+	})
+
+	weather, err := h.mcpToolsCall(json.RawMessage(`{"name":"get_instance_weather","arguments":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	weatherContent := weather["structuredContent"].(map[string]any)
+	weatherFields := weatherContent["weather"].(map[string]any)
+	if got := weatherFields["ambientTempC"]; got != 26 {
+		t.Fatalf("ambientTempC = %#v, want 26", got)
+	}
+	if got := weatherFields["cloudLevel"]; got != 0.1 {
+		t.Fatalf("cloudLevel = %#v, want 0.1", got)
+	}
+	if got := weatherFields["summary"]; !strings.Contains(got.(string), "26C") {
+		t.Fatalf("weather summary should mention temperature, got %#v", got)
+	}
+
+	track, err := h.mcpToolsCall(json.RawMessage(`{"name":"get_instance_track","arguments":{"instanceIdOrName":"duken"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trackContent := track["structuredContent"].(map[string]any)
+	trackFields := trackContent["track"].(map[string]any)
+	if got := trackFields["effectiveTrack"]; got != "monza" {
+		t.Fatalf("effectiveTrack = %#v, want monza", got)
+	}
+}
+
+func TestMCPResolverFallsBackToSingleInstanceForUserShorthand(t *testing.T) {
+	h := newMCPTestHandlerWithInstances(t, testInstanceSpec{id: "1778596425", name: "Dukentre SERVER", track: "monza"})
+
+	result, err := h.mcpToolsCall(json.RawMessage(`{"name":"get_instance_status","arguments":{"instanceIdOrName":"1"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := result["structuredContent"].(map[string]any)
+	instanceRef := content["instance"].(map[string]any)
+	if got := instanceRef["id"]; got != "1778596425" {
+		t.Fatalf("single-instance fallback selected %#v", got)
+	}
+}
+
+func TestMCPInstanceConfigRedactsSecrets(t *testing.T) {
+	h := newMCPTestHandlerWithInstances(t, testInstanceSpec{
+		id:            "1778596425",
+		name:          "Dukentre SERVER",
+		track:         "monza",
+		adminPass:     "228339227",
+		serverPass:    "server-secret",
+		spectatorPass: "spectator-secret",
+	})
+
+	result, err := h.mcpToolsCall(json.RawMessage(`{"name":"get_instance_config","arguments":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, secret := range []string{"228339227", "server-secret", "spectator-secret"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("get_instance_config leaked secret %q in %s", secret, text)
+		}
+	}
+	if !strings.Contains(text, "[redacted]") {
+		t.Fatalf("get_instance_config should include redaction markers: %s", text)
+	}
+
+	resource, err := h.mcpResourcesRead(json.RawMessage(`{"uri":"accweb://instances/1778596425/config"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceData, err := json.Marshal(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceText := string(resourceData)
+	for _, secret := range []string{"228339227", "server-secret", "spectator-secret"} {
+		if strings.Contains(resourceText, secret) {
+			t.Fatalf("config resource leaked secret %q in %s", secret, resourceText)
+		}
+	}
+}
+
+func TestMCPInstanceNotFoundErrorIsActionable(t *testing.T) {
+	h := newMCPTestHandlerWithInstances(t,
+		testInstanceSpec{id: "111", name: "Alpha", track: "monza"},
+		testInstanceSpec{id: "222", name: "Beta", track: "spa"},
+	)
+
+	result, err := h.mcpToolsCall(json.RawMessage(`{"name":"get_instance_weather","arguments":{"instanceIdOrName":"missing"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result["isError"]; got != true {
+		t.Fatalf("expected isError=true, got %#v", got)
+	}
+	content := result["structuredContent"].(map[string]any)
+	if got := content["code"]; got != "instance_not_found" {
+		t.Fatalf("error code = %#v, want instance_not_found", got)
+	}
+	if _, ok := content["availableInstances"]; !ok {
+		t.Fatalf("actionable error should include availableInstances: %#v", content)
+	}
+}
+
+func TestMCPResourceTemplatesListIncludesDomainResources(t *testing.T) {
+	var h Handler
+	result := h.mcpResourceTemplatesList()
+	templates := result["resourceTemplates"].([]mcpResourceTemplate)
+
+	seen := map[string]bool{}
+	for _, template := range templates {
+		seen[template.URITemplate] = true
+		if got := template.Annotations["audience"]; got == nil {
+			t.Fatalf("%s must include audience annotation", template.URITemplate)
+		}
+	}
+	for _, uri := range []string{
+		"accweb://instances",
+		"accweb://instances/{instanceId}/status",
+		"accweb://instances/{instanceId}/weather",
+		"accweb://instances/{instanceId}/config",
+	} {
+		if !seen[uri] {
+			t.Fatalf("missing resource template %s", uri)
+		}
+	}
+}
+
 func assertNoNilRequired(t *testing.T, path string, value any) {
 	t.Helper()
 
@@ -250,4 +418,104 @@ func performMCPRequest(router http.Handler, method, body string, headers map[str
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 	return rec
+}
+
+type testInstanceSpec struct {
+	id            string
+	name          string
+	track         string
+	ambientTemp   int
+	cloudLevel    float64
+	rain          float64
+	randomness    int
+	adminPass     string
+	serverPass    string
+	spectatorPass string
+}
+
+func newMCPTestHandlerWithInstances(t *testing.T, specs ...testInstanceSpec) Handler {
+	t.Helper()
+
+	baseDir := t.TempDir()
+	for _, spec := range specs {
+		writeTestInstance(t, baseDir, spec)
+	}
+
+	config := &cfg.Config{ConfigPath: baseDir, MCP: cfg.MCP{Token: "test-token"}}
+	sm := server_manager.New(config)
+	if err := sm.LoadAll(); err != nil {
+		t.Fatal(err)
+	}
+	return Handler{config: config, sm: sm}
+}
+
+func writeTestInstance(t *testing.T, baseDir string, spec testInstanceSpec) {
+	t.Helper()
+	if spec.ambientTemp == 0 {
+		spec.ambientTemp = 26
+	}
+	if spec.name == "" {
+		spec.name = "Test SERVER"
+	}
+	if spec.track == "" {
+		spec.track = "monza"
+	}
+
+	dir := filepath.Join(baseDir, spec.id)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	accCfg := instance.AccConfigFiles{
+		Configuration: instance.ConfigurationJson{UdpPort: 9231, TcpPort: 9232, MaxConnections: 20},
+		Settings: instance.SettingsJson{
+			ServerName:        spec.name,
+			Password:          spec.serverPass,
+			AdminPassword:     spec.adminPass,
+			SpectatorPassword: spec.spectatorPass,
+			MaxCarSlots:       20,
+			CarGroup:          "GT3",
+		},
+		Event: instance.EventJson{
+			Track:                         spec.track,
+			AmbientTemp:                   spec.ambientTemp,
+			CloudLevel:                    spec.cloudLevel,
+			Rain:                          spec.rain,
+			WeatherRandomness:             spec.randomness,
+			IsFixedConditionQualification: 1,
+			Sessions: []instance.SessionSettings{
+				{HourOfDay: 12, DayOfWeekend: 2, TimeMultiplier: 1, SessionType: "Q", SessionDurationMinutes: 5},
+				{HourOfDay: 13, DayOfWeekend: 3, TimeMultiplier: 1, SessionType: "R", SessionDurationMinutes: 20},
+			},
+		},
+		Entrylist:   instance.EntrylistJson{Entries: []instance.EntrySettings{}},
+		Bop:         instance.BopJson{Entries: []instance.BopSettings{}},
+		AssistRules: instance.AssistRulesJson{},
+	}
+	instance.SetConfigVersion(&accCfg)
+
+	writeJSON(t, dir, "accwebConfig.json", instance.AccWebConfigJson{
+		ID:        spec.id,
+		Settings:  instance.AccWebSettingsJson{},
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	})
+	writeJSON(t, dir, "configuration.json", accCfg.Configuration)
+	writeJSON(t, dir, "settings.json", accCfg.Settings)
+	writeJSON(t, dir, "event.json", accCfg.Event)
+	writeJSON(t, dir, "eventRules.json", accCfg.EventRules)
+	writeJSON(t, dir, "entrylist.json", accCfg.Entrylist)
+	writeJSON(t, dir, "bop.json", accCfg.Bop)
+	writeJSON(t, dir, "assistRules.json", accCfg.AssistRules)
+}
+
+func writeJSON(t *testing.T, dir string, name string, value any) {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), data, 0644); err != nil {
+		t.Fatal(err)
+	}
 }

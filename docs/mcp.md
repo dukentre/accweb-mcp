@@ -180,24 +180,78 @@ List tools:
 Available tools:
 
 * `list_instances` - returns configured instances and runtime state
-* `get_instance_config` - returns the complete configuration for one instance
+* `get_instance_status` - returns runtime state, clients, session, ports and track
+* `get_instance_weather` - returns semantic weather fields, summary and source paths
+* `get_instance_track` - returns configured, live and effective track
+* `get_instance_config` - fallback/debug tool that returns redacted full configuration
 * `set_instance_parameters` - updates one or more ACC JSON values by path
 * `start_instance` - starts an ACC server instance
 * `stop_instance` - stops an ACC server instance
 * `create_quick_race_instance` - creates a simple qualifying/race instance
 
-`list_instances` and `get_instance_config` include `annotations.readOnlyHint: true`, so MCP clients that trust this server can treat them as read-only calls. Mutating tools include `annotations.readOnlyHint: false`; `set_instance_parameters` is also marked with `destructiveHint: true` because it overwrites existing ACC JSON values.
+All tools include `outputSchema`. Successful tool calls return `structuredContent` and the same JSON serialized into a text content block for backward compatibility.
+
+`list_instances`, `get_instance_status`, `get_instance_weather`, `get_instance_track`, and `get_instance_config` include:
+
+```json
+{
+  "readOnlyHint": true,
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false
+}
+```
+
+Mutating tools include `annotations.readOnlyHint: false`; `set_instance_parameters` is also marked with `destructiveHint: true` because it overwrites existing ACC JSON values.
+
+Read-only tools accept `instanceIdOrName` instead of requiring a strict id. It can be an ACCWeb id, exact server name, partial server name, or omitted when there is only one running/configured instance.
+
+If an instance selector cannot be resolved, tools return `isError: true` with actionable `structuredContent`, including `code`, `message`, `recoveryHint`, and `availableInstances` when useful.
 
 If an instance is running, `set_instance_parameters` requires `restartIfLive: true`. ACCWeb will stop the instance, save the configuration, and start it again.
 
+## Resource templates
+
+`resources/templates/list` returns:
+
+* `accweb://instances`
+* `accweb://instances/{instanceId}/status`
+* `accweb://instances/{instanceId}/weather`
+* `accweb://instances/{instanceId}/config`
+
+Resources and templates include annotations for assistant use:
+
+```json
+{
+  "audience": ["assistant"],
+  "priority": 0.95
+}
+```
+
 ## Change weather
 
-Weather is stored in `event.json`.
+For read-only weather questions, use `get_instance_weather`:
 
 ```json
 {
   "jsonrpc": "2.0",
   "id": 7,
+  "method": "tools/call",
+  "params": {
+    "name": "get_instance_weather",
+    "arguments": {
+      "instanceIdOrName": "Dukentre"
+    }
+  }
+}
+```
+
+For updates, weather is stored in `event.json` and can be changed with `set_instance_parameters`.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 8,
   "method": "tools/call",
   "params": {
     "name": "set_instance_parameters",
@@ -231,7 +285,7 @@ Time of day is configured per session:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 8,
+  "id": 9,
   "method": "tools/call",
   "params": {
     "name": "set_instance_parameters",
@@ -264,7 +318,7 @@ To add or remove sessions, set the whole `acc.event.sessions` array:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 9,
+  "id": 10,
   "method": "tools/call",
   "params": {
     "name": "set_instance_parameters",
@@ -323,7 +377,7 @@ To keep only one race session, set the array to one object:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 10,
+  "id": 11,
   "method": "tools/call",
   "params": {
     "name": "create_quick_race_instance",
