@@ -80,12 +80,13 @@ type mcpPromptArgument struct {
 }
 
 type accParameterDoc struct {
-	File        string   `json:"file"`
-	Path        string   `json:"path"`
-	Type        string   `json:"type"`
-	Description string   `json:"description"`
-	Values      []string `json:"values,omitempty"`
-	Range       string   `json:"range,omitempty"`
+	File                  string   `json:"file"`
+	Path                  string   `json:"path"`
+	Type                  string   `json:"type"`
+	Description           string   `json:"description"`
+	Values                []string `json:"values,omitempty"`
+	Range                 string   `json:"range,omitempty"`
+	AllowedValuesResource string   `json:"allowedValuesResource,omitempty"`
 }
 
 type mcpSetParametersArgs struct {
@@ -236,6 +237,8 @@ func (h *Handler) dispatchMCP(req mcpRequest) mcpResponse {
 		result = h.mcpResourceTemplatesList()
 	case "resources/read":
 		result, err = h.mcpResourcesRead(req.Params)
+	case "completion/complete":
+		result, err = h.mcpCompletionComplete(req.Params)
 	case "prompts/list":
 		result = h.mcpPromptsList()
 	case "prompts/get":
@@ -265,9 +268,10 @@ func (h *Handler) mcpInitialize() map[string]any {
 	return map[string]any{
 		"protocolVersion": mcpProtocolVersion,
 		"capabilities": map[string]any{
-			"resources": map[string]any{},
-			"prompts":   map[string]any{},
-			"tools":     map[string]any{},
+			"resources":   map[string]any{},
+			"prompts":     map[string]any{},
+			"tools":       map[string]any{},
+			"completions": map[string]any{},
 		},
 		"serverInfo": map[string]any{
 			"name":    "accweb-mcp",
@@ -279,6 +283,7 @@ func (h *Handler) mcpInitialize() map[string]any {
 func (h *Handler) mcpResourcesList() map[string]any {
 	resources := []mcpResource{
 		mcpJSONResource("accweb://parameters", "parameters", "ACC server parameter reference", "All ACCWeb-managed ACC Dedicated Server parameters and descriptions.", 0.8),
+		mcpJSONResource("accweb://tracks", "tracks", "ACC track catalog", "All supported ACC track ids, display names, countries and aliases. Use this for questions about maps/tracks.", 1.0),
 		mcpJSONResource("accweb://instances", "instances", "ACCWeb instances", "Configured ACCWeb instances with ids, names, tracks and runtime state.", 1.0),
 	}
 
@@ -305,6 +310,7 @@ func (h *Handler) mcpResourceTemplatesList() map[string]any {
 			mcpJSONResourceTemplate("accweb://instances/{instanceId}/status", "instance_status", "ACC instance status", "Runtime status for one ACC instance.", 0.9),
 			mcpJSONResourceTemplate("accweb://instances/{instanceId}/weather", "instance_weather", "ACC instance weather", "Weather configuration for one ACC instance.", 0.95),
 			mcpJSONResourceTemplate("accweb://instances/{instanceId}/config", "instance_config", "ACC instance configuration", "Redacted full ACCWeb and ACC JSON configuration for fallback/debug use.", 0.35),
+			mcpJSONResourceTemplate("accweb://tracks/{trackId}", "track", "ACC track", "One ACC track from the global track catalog. The trackId argument supports completion.", 1.0),
 		},
 	}
 }
@@ -321,6 +327,15 @@ func (h *Handler) mcpResourcesRead(raw json.RawMessage) (map[string]any, error) 
 	switch {
 	case params.URI == "accweb://parameters":
 		payload = accParameterDocs()
+	case params.URI == "accweb://tracks":
+		payload = accTracksPayload()
+	case strings.HasPrefix(params.URI, "accweb://tracks/"):
+		id := strings.TrimPrefix(params.URI, "accweb://tracks/")
+		track, ok := findACCTrack(id)
+		if !ok {
+			return nil, fmt.Errorf("unknown track id: %s", id)
+		}
+		payload = map[string]any{"track": track}
 	case params.URI == "accweb://instances":
 		payload = map[string]any{"instances": h.mcpInstanceSummaries()}
 	case strings.HasPrefix(params.URI, "accweb://instances/") && strings.HasSuffix(params.URI, "/config"):
@@ -363,6 +378,48 @@ func (h *Handler) mcpResourcesRead(raw json.RawMessage) (map[string]any, error) 
 			},
 		},
 	}, nil
+}
+
+func (h *Handler) mcpCompletionComplete(raw json.RawMessage) (map[string]any, error) {
+	var params struct {
+		Ref struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+			URI  string `json:"uri"`
+		} `json:"ref"`
+		Argument struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"argument"`
+	}
+	if err := json.Unmarshal(raw, &params); err != nil {
+		return nil, err
+	}
+
+	values := []string{}
+	if isTrackCompletionRef(params.Ref.Type, params.Ref.Name, params.Ref.URI, params.Argument.Name) {
+		values = completeACCTrackIDs(params.Argument.Value)
+	}
+
+	return map[string]any{
+		"completion": map[string]any{
+			"values":  values,
+			"total":   len(values),
+			"hasMore": false,
+		},
+	}, nil
+}
+
+func isTrackCompletionRef(refType string, refName string, refURI string, argumentName string) bool {
+	argumentName = strings.TrimSpace(argumentName)
+	switch refType {
+	case "ref/prompt":
+		return refName == "configure_quick_race" && argumentName == "track"
+	case "ref/resource":
+		return refURI == "accweb://tracks/{trackId}" && (argumentName == "trackId" || argumentName == "track")
+	default:
+		return false
+	}
 }
 
 func (h *Handler) mcpInstanceSummaries() []ListServerItem {
@@ -413,7 +470,7 @@ func (h *Handler) mcpPromptsList() map[string]any {
 				Title:       "Configure quick race",
 				Description: "Prepare an ACC quick race configuration with track, car group, slots and session durations.",
 				Arguments: []mcpPromptArgument{
-					{Name: "track", Description: "ACC track id, e.g. monza", Required: true},
+					{Name: "track", Title: "Track", Description: "ACC track id from accweb://tracks, e.g. monza", Required: true},
 					{Name: "carGroup", Description: "Car group, e.g. GT3", Required: true},
 					{Name: "qualifyingMinutes", Description: "Qualifying duration in minutes", Required: true},
 					{Name: "raceMinutes", Description: "Race duration in minutes", Required: true},
@@ -478,6 +535,14 @@ func mcpPromptMessages(text string) map[string]any {
 func (h *Handler) mcpToolsList() map[string]any {
 	return map[string]any{
 		"tools": []mcpTool{
+			{
+				Name:         "list_tracks",
+				Title:        "List ACC tracks",
+				Description:  "List the global ACC track catalog with valid track ids, names, countries and aliases. Use this for questions about maps/tracks; it is not a car list.",
+				InputSchema:  schemaObject(map[string]any{}),
+				OutputSchema: mcpTracksOutputSchema(),
+				Annotations:  mcpReadOnlyToolAnnotations(),
+			},
 			{
 				Name:         "list_instances",
 				Title:        "List ACC instances",
@@ -587,6 +652,8 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 	}
 
 	switch params.Name {
+	case "list_tracks":
+		return mcpToolStructured(accTracksPayload())
 	case "list_instances":
 		return mcpToolStructured(map[string]any{"instances": h.mcpInstanceSummaries()})
 	case "get_instance_status":
@@ -1151,6 +1218,21 @@ func mcpInstanceSelectorInputSchema() map[string]any {
 	})
 }
 
+func mcpTracksOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"tracks": schemaArray("Supported ACC track catalog. Values are track ids, not car groups.", mcpTrackSchema()),
+	})
+}
+
+func mcpTrackSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"id":      schemaString("ACC event.json track id, e.g. monza"),
+		"name":    schemaString("Human-readable track name"),
+		"country": schemaString("Track country"),
+		"aliases": schemaArray("Common English/Russian aliases for matching user text", schemaString("Track alias")),
+	})
+}
+
 func mcpListInstancesOutputSchema() map[string]any {
 	return schemaObject(map[string]any{
 		"instances": schemaArray("Configured ACC instances", mcpInstanceSummarySchema()),
@@ -1501,7 +1583,7 @@ func accParameterDocs() []accParameterDoc {
 		{File: "settings.json", Path: "acc.settings.carGroup", Type: "string", Description: "Allowed car group.", Values: []string{"FreeForAll", "GT2", "GT3", "GT4", "GTC", "TCX"}},
 
 		{File: "event.json", Path: "acc.event.configVersion", Type: "integer", Description: "ACC event schema version written by ACCWeb."},
-		{File: "event.json", Path: "acc.event.track", Type: "string", Description: "Track id, e.g. monza."},
+		{File: "event.json", Path: "acc.event.track", Type: "string", Description: "ACC track id selected for the event.", AllowedValuesResource: "accweb://tracks"},
 		{File: "event.json", Path: "acc.event.preRaceWaitingTimeSeconds", Type: "integer", Description: "Waiting time before the race starts, in seconds."},
 		{File: "event.json", Path: "acc.event.sessionOverTimeSeconds", Type: "integer", Description: "Extra time after session end before the server advances, in seconds."},
 		{File: "event.json", Path: "acc.event.ambientTemp", Type: "integer", Description: "Ambient temperature in Celsius."},
