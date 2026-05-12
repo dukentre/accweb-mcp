@@ -2,6 +2,11 @@ name: Build and Push ACCWeb MCP Docker Image
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional extra Docker tag, for example v1.27.2
+        required: false
+        default: ''
   push:
     branches:
       - master
@@ -35,6 +40,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.image_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.image_tag != '' }}
             type=ref,event=branch
             type=ref,event=tag
             type=semver,pattern={{version}}
