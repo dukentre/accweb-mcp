@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -38,27 +39,42 @@ type mcpError struct {
 }
 
 type mcpTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-	Annotations map[string]any `json:"annotations,omitempty"`
+	Name         string         `json:"name"`
+	Title        string         `json:"title,omitempty"`
+	Description  string         `json:"description"`
+	InputSchema  map[string]any `json:"inputSchema"`
+	OutputSchema map[string]any `json:"outputSchema"`
+	Annotations  map[string]any `json:"annotations,omitempty"`
 }
 
 type mcpResource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	MimeType    string `json:"mimeType,omitempty"`
+	URI         string         `json:"uri"`
+	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description,omitempty"`
+	MimeType    string         `json:"mimeType,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
+}
+
+type mcpResourceTemplate struct {
+	URITemplate string         `json:"uriTemplate"`
+	Name        string         `json:"name"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description,omitempty"`
+	MimeType    string         `json:"mimeType,omitempty"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type mcpPrompt struct {
 	Name        string              `json:"name"`
+	Title       string              `json:"title,omitempty"`
 	Description string              `json:"description,omitempty"`
 	Arguments   []mcpPromptArgument `json:"arguments,omitempty"`
 }
 
 type mcpPromptArgument struct {
 	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required,omitempty"`
 }
@@ -83,8 +99,9 @@ type mcpParameterPatch struct {
 	Value any    `json:"value"`
 }
 
-type mcpInstanceIDArgs struct {
-	InstanceID string `json:"instanceId"`
+type mcpInstanceSelectorArgs struct {
+	InstanceID       string `json:"instanceId"`
+	InstanceIDOrName string `json:"instanceIdOrName"`
 }
 
 type mcpCreateQuickRaceArgs struct {
@@ -215,6 +232,8 @@ func (h *Handler) dispatchMCP(req mcpRequest) mcpResponse {
 		result = map[string]any{}
 	case "resources/list":
 		result = h.mcpResourcesList()
+	case "resources/templates/list":
+		result = h.mcpResourceTemplatesList()
 	case "resources/read":
 		result, err = h.mcpResourcesRead(req.Params)
 	case "prompts/list":
@@ -259,20 +278,35 @@ func (h *Handler) mcpInitialize() map[string]any {
 
 func (h *Handler) mcpResourcesList() map[string]any {
 	resources := []mcpResource{
-		{URI: "accweb://parameters", Name: "ACC server parameter reference", Description: "All ACCWeb-managed ACC Dedicated Server parameters and descriptions.", MimeType: "application/json"},
-		{URI: "accweb://instances", Name: "ACCWeb instances", Description: "Configured ACC server instances and runtime status.", MimeType: "application/json"},
+		mcpJSONResource("accweb://parameters", "parameters", "ACC server parameter reference", "All ACCWeb-managed ACC Dedicated Server parameters and descriptions.", 0.8),
+		mcpJSONResource("accweb://instances", "instances", "ACCWeb instances", "Configured ACCWeb instances with ids, names, tracks and runtime state.", 1.0),
 	}
 
 	for _, srv := range h.sm.GetServers() {
 		resources = append(resources, mcpResource{
 			URI:         "accweb://instances/" + srv.GetID() + "/config",
-			Name:        "Instance " + srv.GetID() + " configuration",
-			Description: "Full ACCWeb and ACC JSON configuration for this instance.",
+			Name:        "instance_config_" + srv.GetID(),
+			Title:       "Instance " + srv.GetID() + " configuration",
+			Description: "Redacted ACCWeb and ACC JSON configuration for this instance. Prefer status, track and weather tools for normal questions.",
 			MimeType:    "application/json",
+			Annotations: mcpResourceAnnotations(0.35),
 		})
+		resources = append(resources, mcpJSONResource("accweb://instances/"+srv.GetID()+"/status", "instance_status_"+srv.GetID(), "Instance "+srv.GetID()+" status", "Runtime status for this ACC instance.", 0.9))
+		resources = append(resources, mcpJSONResource("accweb://instances/"+srv.GetID()+"/weather", "instance_weather_"+srv.GetID(), "Instance "+srv.GetID()+" weather", "Weather configuration and source paths for this ACC instance.", 0.95))
 	}
 
 	return map[string]any{"resources": resources}
+}
+
+func (h *Handler) mcpResourceTemplatesList() map[string]any {
+	return map[string]any{
+		"resourceTemplates": []mcpResourceTemplate{
+			mcpJSONResourceTemplate("accweb://instances", "instances", "ACCWeb instances", "Configured ACCWeb instances and runtime state.", 1.0),
+			mcpJSONResourceTemplate("accweb://instances/{instanceId}/status", "instance_status", "ACC instance status", "Runtime status for one ACC instance.", 0.9),
+			mcpJSONResourceTemplate("accweb://instances/{instanceId}/weather", "instance_weather", "ACC instance weather", "Weather configuration for one ACC instance.", 0.95),
+			mcpJSONResourceTemplate("accweb://instances/{instanceId}/config", "instance_config", "ACC instance configuration", "Redacted full ACCWeb and ACC JSON configuration for fallback/debug use.", 0.35),
+		},
+	}
 }
 
 func (h *Handler) mcpResourcesRead(raw json.RawMessage) (map[string]any, error) {
@@ -288,22 +322,28 @@ func (h *Handler) mcpResourcesRead(raw json.RawMessage) (map[string]any, error) 
 	case params.URI == "accweb://parameters":
 		payload = accParameterDocs()
 	case params.URI == "accweb://instances":
-		payload = h.mcpInstanceSummaries()
+		payload = map[string]any{"instances": h.mcpInstanceSummaries()}
 	case strings.HasPrefix(params.URI, "accweb://instances/") && strings.HasSuffix(params.URI, "/config"):
 		id := strings.TrimSuffix(strings.TrimPrefix(params.URI, "accweb://instances/"), "/config")
 		srv, err := h.sm.GetServerByID(id)
 		if err != nil {
 			return nil, err
 		}
-		payload = map[string]any{
-			"id":        srv.GetID(),
-			"path":      srv.Path,
-			"isRunning": srv.IsRunning(),
-			"pid":       srv.GetProcessID(),
-			"accWeb":    srv.Cfg.Settings,
-			"acc":       srv.AccCfg,
-			"live":      srv.Live,
+		payload = h.mcpInstanceConfigPayload(srv)
+	case strings.HasPrefix(params.URI, "accweb://instances/") && strings.HasSuffix(params.URI, "/status"):
+		id := strings.TrimSuffix(strings.TrimPrefix(params.URI, "accweb://instances/"), "/status")
+		srv, err := h.sm.GetServerByID(id)
+		if err != nil {
+			return nil, err
 		}
+		payload = h.mcpInstanceStatusPayload(srv)
+	case strings.HasPrefix(params.URI, "accweb://instances/") && strings.HasSuffix(params.URI, "/weather"):
+		id := strings.TrimSuffix(strings.TrimPrefix(params.URI, "accweb://instances/"), "/weather")
+		srv, err := h.sm.GetServerByID(id)
+		if err != nil {
+			return nil, err
+		}
+		payload = h.mcpInstanceWeatherPayload(srv)
 	default:
 		return nil, fmt.Errorf("unknown resource URI: %s", params.URI)
 	}
@@ -316,9 +356,10 @@ func (h *Handler) mcpResourcesRead(raw json.RawMessage) (map[string]any, error) 
 	return map[string]any{
 		"contents": []map[string]any{
 			{
-				"uri":      params.URI,
-				"mimeType": "application/json",
-				"text":     string(text),
+				"uri":         params.URI,
+				"mimeType":    "application/json",
+				"text":        string(text),
+				"annotations": mcpResourceAnnotations(0.8),
 			},
 		},
 	}, nil
@@ -326,7 +367,7 @@ func (h *Handler) mcpResourcesRead(raw json.RawMessage) (map[string]any, error) 
 
 func (h *Handler) mcpInstanceSummaries() []ListServerItem {
 	out := []ListServerItem{}
-	for _, srv := range h.sm.GetServers() {
+	for _, srv := range h.sortedMCPServers() {
 		out = append(out, buildListServerItem(srv))
 	}
 	return out
@@ -336,7 +377,40 @@ func (h *Handler) mcpPromptsList() map[string]any {
 	return map[string]any{
 		"prompts": []mcpPrompt{
 			{
+				Name:        "acc_server_overview",
+				Title:       "ACC server overview",
+				Description: "Answer general questions about configured ACC instances using list_instances and domain read-only tools first.",
+				Arguments: []mcpPromptArgument{
+					{Name: "instanceIdOrName", Title: "Instance", Description: "Optional ACC instance id or exact/partial server name."},
+				},
+			},
+			{
+				Name:        "acc_weather_answer",
+				Title:       "ACC weather answer",
+				Description: "Answer weather questions by calling get_instance_weather instead of reading raw configuration.",
+				Arguments: []mcpPromptArgument{
+					{Name: "instanceIdOrName", Title: "Instance", Description: "Optional ACC instance id or exact/partial server name."},
+				},
+			},
+			{
+				Name:        "acc_race_setup_summary",
+				Title:       "ACC race setup summary",
+				Description: "Summarize track, sessions, weather, slots and car group for an ACC instance.",
+				Arguments: []mcpPromptArgument{
+					{Name: "instanceIdOrName", Title: "Instance", Description: "Optional ACC instance id or exact/partial server name."},
+				},
+			},
+			{
+				Name:        "acc_config_explain",
+				Title:       "ACC config explain",
+				Description: "Explain one ACC Dedicated Server parameter and prefer domain tools for common status, track and weather questions.",
+				Arguments: []mcpPromptArgument{
+					{Name: "path", Title: "Path", Description: "Parameter path, e.g. acc.settings.maxCarSlots", Required: true},
+				},
+			},
+			{
 				Name:        "configure_quick_race",
+				Title:       "Configure quick race",
 				Description: "Prepare an ACC quick race configuration with track, car group, slots and session durations.",
 				Arguments: []mcpPromptArgument{
 					{Name: "track", Description: "ACC track id, e.g. monza", Required: true},
@@ -347,6 +421,7 @@ func (h *Handler) mcpPromptsList() map[string]any {
 			},
 			{
 				Name:        "explain_parameter",
+				Title:       "Explain parameter",
 				Description: "Explain one ACC Dedicated Server parameter and where it is stored.",
 				Arguments: []mcpPromptArgument{
 					{Name: "path", Description: "Parameter path, e.g. acc.settings.maxCarSlots", Required: true},
@@ -366,6 +441,14 @@ func (h *Handler) mcpPromptsGet(raw json.RawMessage) (map[string]any, error) {
 	}
 
 	switch params.Name {
+	case "acc_server_overview":
+		return mcpPromptMessages("Use list_instances first. If the user asks about one server and only one running/configured ACC instance exists, use that instance. For track questions call get_instance_track; for weather questions call get_instance_weather; for runtime questions call get_instance_status. Use get_instance_config only as fallback/debug context."), nil
+	case "acc_weather_answer":
+		return mcpPromptMessages("For ACC weather questions, call get_instance_weather with instanceIdOrName when available. Do not ask which raw JSON path stores weather. The tool returns ambientTempC, cloudLevel, rain, weatherRandomness, a summary, and sourcePaths."), nil
+	case "acc_race_setup_summary":
+		return mcpPromptMessages("Summarize the ACC race setup by combining get_instance_track, get_instance_weather and get_instance_status. Mention track, current state, session, connected clients, slots and weather. Use get_instance_config only if a specific field is missing."), nil
+	case "acc_config_explain":
+		return mcpPromptMessages("Explain this ACCWeb parameter path, including JSON file, valid values, and operational impact. If the path is about weather, track or status, mention the specialized read-only tool that exposes it directly: " + params.Arguments["path"]), nil
 	case "configure_quick_race":
 		return mcpPromptMessages(fmt.Sprintf(
 			"Configure an ACC Dedicated Server quick race. Use the parameter reference resource first, then use tools to create or update an instance. Desired values: track=%s, carGroup=%s, qualifyingMinutes=%s, raceMinutes=%s.",
@@ -396,19 +479,48 @@ func (h *Handler) mcpToolsList() map[string]any {
 	return map[string]any{
 		"tools": []mcpTool{
 			{
-				Name:        "list_instances",
-				Description: "List ACCWeb server instances and runtime state.",
-				InputSchema: schemaObject(map[string]any{}),
-				Annotations: mcpReadOnlyToolAnnotations(),
+				Name:         "list_instances",
+				Title:        "List ACC instances",
+				Description:  "List ACCWeb server instances with ids, names, tracks and runtime state. Use this before asking the user to identify a server.",
+				InputSchema:  schemaObject(map[string]any{}),
+				OutputSchema: mcpListInstancesOutputSchema(),
+				Annotations:  mcpReadOnlyToolAnnotations(),
 			},
 			{
-				Name:        "get_instance_config",
-				Description: "Get one instance's ACCWeb and ACC configuration.",
-				InputSchema: schemaObject(map[string]any{"instanceId": schemaString("ACCWeb instance id")}, "instanceId"),
-				Annotations: mcpReadOnlyToolAnnotations(),
+				Name:         "get_instance_status",
+				Title:        "Get ACC instance status",
+				Description:  "Get runtime status for an ACC instance. Accepts id, exact/partial server name, or omitted selector when only one running/configured instance exists.",
+				InputSchema:  mcpInstanceSelectorInputSchema(),
+				OutputSchema: mcpInstanceStatusOutputSchema(),
+				Annotations:  mcpReadOnlyToolAnnotations(),
+			},
+			{
+				Name:         "get_instance_weather",
+				Title:        "Get ACC instance weather",
+				Description:  "Get weather settings for an ACC instance with semantic fields and sourcePaths. Use this for questions about weather instead of raw config.",
+				InputSchema:  mcpInstanceSelectorInputSchema(),
+				OutputSchema: mcpInstanceWeatherOutputSchema(),
+				Annotations:  mcpReadOnlyToolAnnotations(),
+			},
+			{
+				Name:         "get_instance_track",
+				Title:        "Get ACC instance track",
+				Description:  "Get configured/live/effective track for an ACC instance. Use this for map/track questions instead of raw config.",
+				InputSchema:  mcpInstanceSelectorInputSchema(),
+				OutputSchema: mcpInstanceTrackOutputSchema(),
+				Annotations:  mcpReadOnlyToolAnnotations(),
+			},
+			{
+				Name:         "get_instance_config",
+				Title:        "Get redacted ACC config",
+				Description:  "Fallback/debug tool that returns a redacted full ACCWeb and ACC configuration. Prefer status, track and weather tools for normal questions.",
+				InputSchema:  mcpInstanceSelectorInputSchema(),
+				OutputSchema: mcpInstanceConfigOutputSchema(),
+				Annotations:  mcpReadOnlyToolAnnotations(),
 			},
 			{
 				Name:        "set_instance_parameters",
+				Title:       "Set ACC parameters",
 				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. The instance must be stopped unless restartIfLive is true.",
 				InputSchema: schemaObject(map[string]any{
 					"instanceId":    schemaString("ACCWeb instance id"),
@@ -422,22 +534,28 @@ func (h *Handler) mcpToolsList() map[string]any {
 						}, "path", "value"),
 					},
 				}, "instanceId", "updates"),
-				Annotations: mcpWriteToolAnnotations(true, false),
+				OutputSchema: mcpSetParametersOutputSchema(),
+				Annotations:  mcpWriteToolAnnotations(true, false),
 			},
 			{
-				Name:        "start_instance",
-				Description: "Start an ACC server instance.",
-				InputSchema: schemaObject(map[string]any{"instanceId": schemaString("ACCWeb instance id")}, "instanceId"),
-				Annotations: mcpWriteToolAnnotations(false, false),
+				Name:         "start_instance",
+				Title:        "Start ACC instance",
+				Description:  "Start an ACC server instance.",
+				InputSchema:  mcpInstanceSelectorInputSchema(),
+				OutputSchema: mcpActionOutputSchema(),
+				Annotations:  mcpWriteToolAnnotations(false, false),
 			},
 			{
-				Name:        "stop_instance",
-				Description: "Stop an ACC server instance.",
-				InputSchema: schemaObject(map[string]any{"instanceId": schemaString("ACCWeb instance id")}, "instanceId"),
-				Annotations: mcpWriteToolAnnotations(false, true),
+				Name:         "stop_instance",
+				Title:        "Stop ACC instance",
+				Description:  "Stop an ACC server instance.",
+				InputSchema:  mcpInstanceSelectorInputSchema(),
+				OutputSchema: mcpActionOutputSchema(),
+				Annotations:  mcpWriteToolAnnotations(false, true),
 			},
 			{
 				Name:        "create_quick_race_instance",
+				Title:       "Create ACC quick race",
 				Description: "Create a new simple Q/R ACC instance with common settings.",
 				InputSchema: schemaObject(map[string]any{
 					"serverName":        schemaString("Server name"),
@@ -452,7 +570,8 @@ func (h *Handler) mcpToolsList() map[string]any {
 					"tcpPort":           schemaInteger("TCP port"),
 					"udpPort":           schemaInteger("UDP port"),
 				}, "serverName", "track", "carGroup", "maxCarSlots", "qualifyingMinutes", "raceMinutes"),
-				Annotations: mcpWriteToolAnnotations(false, false),
+				OutputSchema: mcpCreateQuickRaceOutputSchema(),
+				Annotations:  mcpWriteToolAnnotations(false, false),
 			},
 		},
 	}
@@ -469,57 +588,91 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 
 	switch params.Name {
 	case "list_instances":
-		return mcpToolJSON(h.mcpInstanceSummaries())
-	case "get_instance_config":
-		var args mcpInstanceIDArgs
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+		return mcpToolStructured(map[string]any{"instances": h.mcpInstanceSummaries()})
+	case "get_instance_status":
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
 			return nil, err
 		}
-		srv, err := h.sm.GetServerByID(args.InstanceID)
-		if err != nil {
-			return mcpToolError(err.Error()), nil
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
 		}
-		return mcpToolJSON(map[string]any{"id": srv.GetID(), "accWeb": srv.Cfg.Settings, "acc": srv.AccCfg, "live": srv.Live})
+		return mcpToolStructured(h.mcpInstanceStatusPayload(srv))
+	case "get_instance_weather":
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
+			return nil, err
+		}
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
+		}
+		return mcpToolStructured(h.mcpInstanceWeatherPayload(srv))
+	case "get_instance_track":
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
+			return nil, err
+		}
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
+		}
+		return mcpToolStructured(h.mcpInstanceTrackPayload(srv))
+	case "get_instance_config":
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
+			return nil, err
+		}
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
+		}
+		return mcpToolStructured(h.mcpInstanceConfigPayload(srv))
 	case "set_instance_parameters":
 		var args mcpSetParametersArgs
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
 			return nil, err
 		}
 		result, err := h.mcpSetInstanceParameters(args)
 		if err != nil {
-			return mcpToolError(err.Error()), nil
+			return mcpToolErrorStructured("set_parameters_failed", err.Error(), "Check the parameter path/value types and whether restartIfLive is needed.", h.mcpInstanceSummaries()), nil
 		}
 		return result, nil
 	case "start_instance":
-		var args mcpInstanceIDArgs
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
 			return nil, err
 		}
-		if err := h.sm.Start(args.InstanceID); err != nil {
-			return mcpToolError(err.Error()), nil
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
 		}
-		return mcpToolText("instance started: " + args.InstanceID), nil
+		if err := h.sm.Start(srv.GetID()); err != nil {
+			return mcpToolErrorStructured("start_failed", err.Error(), "Check whether the instance is already running and whether ACC server files are available.", h.mcpInstanceSummaries()), nil
+		}
+		return mcpToolStructured(map[string]any{"instance": mcpInstanceRef(srv), "action": "started", "success": true})
 	case "stop_instance":
-		var args mcpInstanceIDArgs
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
 			return nil, err
 		}
-		srv, err := h.sm.GetServerByID(args.InstanceID)
-		if err != nil {
-			return mcpToolError(err.Error()), nil
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
 		}
 		if err := srv.Stop(); err != nil {
-			return mcpToolError(err.Error()), nil
+			return mcpToolErrorStructured("stop_failed", err.Error(), "Check the instance status with get_instance_status and try again.", h.mcpInstanceSummaries()), nil
 		}
-		return mcpToolText("instance stopped: " + args.InstanceID), nil
+		return mcpToolStructured(map[string]any{"instance": mcpInstanceRef(srv), "action": "stopped", "success": true})
 	case "create_quick_race_instance":
 		var args mcpCreateQuickRaceArgs
-		if err := json.Unmarshal(params.Arguments, &args); err != nil {
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
 			return nil, err
 		}
 		result, err := h.mcpCreateQuickRaceInstance(args)
 		if err != nil {
-			return mcpToolError(err.Error()), nil
+			return mcpToolErrorStructured("create_instance_failed", err.Error(), "Check ACC server files, ports and required quick race arguments.", h.mcpInstanceSummaries()), nil
 		}
 		return result, nil
 	default:
@@ -530,13 +683,13 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[string]any, error) {
 	srv, err := h.sm.GetServerByID(args.InstanceID)
 	if err != nil {
-		return nil, err
+		return mcpToolErrorStructured("instance_not_found", "No ACC instance matched '"+args.InstanceID+"'", "Call list_instances or use one of availableInstances.", h.mcpInstanceSummaries()), nil
 	}
 
 	wasRunning := srv.IsRunning()
 	if wasRunning {
 		if !args.RestartIfLive {
-			return nil, errors.New("instance is running; set restartIfLive=true to stop, save and restart")
+			return mcpToolErrorStructured("instance_running", "Instance is running; set restartIfLive=true to stop, save and restart.", "Call set_instance_parameters again with restartIfLive=true, or stop the instance first.", h.mcpInstanceSummaries()), nil
 		}
 		if err := srv.Stop(); err != nil {
 			return nil, err
@@ -561,7 +714,7 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 		}
 	}
 
-	return mcpToolJSON(map[string]any{"updated": args.Updates, "restarted": wasRunning, "instanceId": args.InstanceID})
+	return mcpToolStructured(map[string]any{"updated": redactParameterPatches(args.Updates), "restarted": wasRunning, "instanceId": args.InstanceID})
 }
 
 func (h *Handler) mcpCreateQuickRaceInstance(args mcpCreateQuickRaceArgs) (map[string]any, error) {
@@ -637,31 +790,263 @@ func (h *Handler) mcpCreateQuickRaceInstance(args mcpCreateQuickRaceArgs) (map[s
 		return nil, err
 	}
 
-	return mcpToolJSON(map[string]any{"instanceId": srv.GetID(), "config": srv.AccCfg})
+	return mcpToolStructured(map[string]any{"instance": mcpInstanceRef(srv), "config": redactSecrets(srv.AccCfg)})
+}
+
+func (args mcpInstanceSelectorArgs) Selector() string {
+	if strings.TrimSpace(args.InstanceIDOrName) != "" {
+		return args.InstanceIDOrName
+	}
+	return args.InstanceID
+}
+
+func decodeMCPArguments(raw json.RawMessage, dst any) error {
+	if len(raw) == 0 {
+		raw = json.RawMessage(`{}`)
+	}
+	return json.Unmarshal(raw, dst)
+}
+
+func (h *Handler) mcpResolveInstance(selector string) (*instance.Instance, map[string]any) {
+	selector = strings.TrimSpace(selector)
+	servers := h.sortedMCPServers()
+	if len(servers) == 0 {
+		return nil, mcpToolErrorStructured("instance_not_found", "No ACC instances are configured.", "Create an instance first, or check ACCWeb configuration.", []ListServerItem{})
+	}
+
+	if selector == "" {
+		if srv := defaultMCPServer(servers); srv != nil {
+			return srv, nil
+		}
+		return nil, mcpToolErrorStructured("instance_ambiguous", "More than one ACC instance is available.", "Call list_instances and pass instanceIdOrName with an id or exact/partial server name.", h.mcpInstanceSummaries())
+	}
+
+	normalized := normalizeMCPSelector(selector)
+	matches := make([]*instance.Instance, 0, len(servers))
+	for _, srv := range servers {
+		if normalizeMCPSelector(srv.GetID()) == normalized || normalizeMCPSelector(srv.AccCfg.Settings.ServerName) == normalized {
+			matches = append(matches, srv)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return nil, mcpToolErrorStructured("instance_ambiguous", "More than one ACC instance matched '"+selector+"'.", "Use one of availableInstances with an exact id.", mcpListServerItems(matches))
+	}
+
+	for _, srv := range servers {
+		if strings.Contains(normalizeMCPSelector(srv.GetID()), normalized) || strings.Contains(normalizeMCPSelector(srv.AccCfg.Settings.ServerName), normalized) {
+			matches = append(matches, srv)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		return nil, mcpToolErrorStructured("instance_ambiguous", "More than one ACC instance matched '"+selector+"'.", "Use one of availableInstances with an exact id.", mcpListServerItems(matches))
+	}
+
+	if srv := defaultMCPServer(servers); srv != nil {
+		return srv, nil
+	}
+
+	return nil, mcpToolErrorStructured("instance_not_found", "No ACC instance matched '"+selector+"'.", "Call list_instances or use one of availableInstances.", h.mcpInstanceSummaries())
+}
+
+func (h *Handler) sortedMCPServers() []*instance.Instance {
+	servers := make([]*instance.Instance, 0, len(h.sm.GetServers()))
+	for _, srv := range h.sm.GetServers() {
+		servers = append(servers, srv)
+	}
+	sort.Slice(servers, func(i, j int) bool {
+		return servers[i].GetID() < servers[j].GetID()
+	})
+	return servers
+}
+
+func defaultMCPServer(servers []*instance.Instance) *instance.Instance {
+	running := make([]*instance.Instance, 0, len(servers))
+	for _, srv := range servers {
+		if srv.IsRunning() {
+			running = append(running, srv)
+		}
+	}
+	if len(running) == 1 {
+		return running[0]
+	}
+	if len(servers) == 1 {
+		return servers[0]
+	}
+	return nil
+}
+
+func normalizeMCPSelector(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func mcpListServerItems(servers []*instance.Instance) []ListServerItem {
+	out := make([]ListServerItem, 0, len(servers))
+	for _, srv := range servers {
+		out = append(out, buildListServerItem(srv))
+	}
+	return out
+}
+
+func mcpInstanceRef(srv *instance.Instance) map[string]any {
+	return map[string]any{
+		"id":   srv.GetID(),
+		"name": srv.AccCfg.Settings.ServerName,
+	}
+}
+
+func (h *Handler) mcpInstanceStatusPayload(srv *instance.Instance) map[string]any {
+	return map[string]any{
+		"instance": mcpInstanceRef(srv),
+		"status": map[string]any{
+			"isRunning":        srv.IsRunning(),
+			"pid":              srv.GetProcessID(),
+			"serverState":      srv.Live.ServerState,
+			"nrClients":        srv.Live.NrClients,
+			"sessionType":      srv.Live.SessionType,
+			"sessionPhase":     srv.Live.SessionPhase,
+			"sessionRemaining": srv.Live.SessionRemaining,
+			"tcpPort":          srv.AccCfg.Configuration.TcpPort,
+			"udpPort":          srv.AccCfg.Configuration.UdpPort,
+			"maxCarSlots":      srv.AccCfg.Settings.MaxCarSlots,
+			"track":            effectiveTrack(srv),
+		},
+		"sourcePaths": []string{
+			"accweb.live.serverState",
+			"accweb.live.nrClients",
+			"accweb.live.sessionType",
+			"accweb.live.sessionPhase",
+			"accweb.live.sessionRemaining",
+			"acc.configuration.tcpPort",
+			"acc.configuration.udpPort",
+			"acc.settings.maxCarSlots",
+		},
+	}
+}
+
+func (h *Handler) mcpInstanceWeatherPayload(srv *instance.Instance) map[string]any {
+	event := srv.AccCfg.Event
+	weather := map[string]any{
+		"ambientTempC":                  event.AmbientTemp,
+		"trackTempC":                    event.TrackTemp,
+		"cloudLevel":                    event.CloudLevel,
+		"rain":                          event.Rain,
+		"weatherRandomness":             event.WeatherRandomness,
+		"simracerWeatherConditions":     event.SimracerWeatherConditions,
+		"isFixedConditionQualification": event.IsFixedConditionQualification == 1,
+		"summary":                       weatherSummary(event),
+	}
+	return map[string]any{
+		"instance": mcpInstanceRef(srv),
+		"weather":  weather,
+		"sourcePaths": []string{
+			"acc.event.ambientTemp",
+			"acc.event.trackTemp",
+			"acc.event.cloudLevel",
+			"acc.event.rain",
+			"acc.event.weatherRandomness",
+			"acc.event.simracerWeatherConditions",
+			"acc.event.isFixedConditionQualification",
+		},
+	}
+}
+
+func (h *Handler) mcpInstanceTrackPayload(srv *instance.Instance) map[string]any {
+	configured := srv.AccCfg.Event.Track
+	live := srv.Live.Track
+	effective := effectiveTrack(srv)
+	return map[string]any{
+		"instance": mcpInstanceRef(srv),
+		"track": map[string]any{
+			"configuredTrack": configured,
+			"liveTrack":       live,
+			"effectiveTrack":  effective,
+			"summary":         "Track is " + effective,
+		},
+		"sourcePaths": []string{
+			"acc.event.track",
+			"accweb.live.track",
+		},
+	}
+}
+
+func (h *Handler) mcpInstanceConfigPayload(srv *instance.Instance) map[string]any {
+	return map[string]any{
+		"instance":  mcpInstanceRef(srv),
+		"isRunning": srv.IsRunning(),
+		"pid":       srv.GetProcessID(),
+		"accWeb":    redactSecrets(srv.Cfg.Settings),
+		"acc":       redactSecrets(srv.AccCfg),
+		"live":      redactSecrets(srv.Live),
+		"redacted": []string{
+			"password",
+			"adminPassword",
+			"spectatorPassword",
+			"token",
+			"secret",
+			"credential",
+			"path",
+		},
+	}
+}
+
+func effectiveTrack(srv *instance.Instance) string {
+	if srv.Live.Track != "" {
+		return srv.Live.Track
+	}
+	return srv.AccCfg.Event.Track
+}
+
+func weatherSummary(event instance.EventJson) string {
+	condition := "dry"
+	if event.Rain > 0 {
+		condition = "rain"
+	}
+	return fmt.Sprintf("%s, %dC, %.0f%% cloud cover, %.0f%% rain", condition, event.AmbientTemp, event.CloudLevel*100, event.Rain*100)
 }
 
 func mcpToolText(text string) map[string]any {
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}
 }
 
-func mcpToolError(text string) map[string]any {
-	result := mcpToolText(text)
-	result["isError"] = true
-	return result
-}
-
-func mcpToolJSON(v any) (map[string]any, error) {
+func mcpToolStructured(v map[string]any) (map[string]any, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	return mcpToolText(string(data)), nil
+	result := mcpToolText(string(data))
+	result["structuredContent"] = v
+	return result, nil
+}
+
+func mcpToolErrorStructured(code string, message string, recoveryHint string, availableInstances []ListServerItem) map[string]any {
+	payload := map[string]any{
+		"code":         code,
+		"message":      message,
+		"recoveryHint": recoveryHint,
+	}
+	if availableInstances != nil {
+		payload["availableInstances"] = availableInstances
+	}
+	result, err := mcpToolStructured(payload)
+	if err != nil {
+		result = mcpToolText(message)
+	}
+	result["isError"] = true
+	return result
 }
 
 func mcpReadOnlyToolAnnotations() map[string]any {
 	return map[string]any{
-		"readOnlyHint":  true,
-		"openWorldHint": false,
+		"readOnlyHint":    true,
+		"destructiveHint": false,
+		"idempotentHint":  true,
+		"openWorldHint":   false,
 	}
 }
 
@@ -672,6 +1057,229 @@ func mcpWriteToolAnnotations(destructive bool, idempotent bool) map[string]any {
 		"idempotentHint":  idempotent,
 		"openWorldHint":   false,
 	}
+}
+
+func mcpResourceAnnotations(priority float64) map[string]any {
+	return map[string]any{
+		"audience": []string{"assistant"},
+		"priority": priority,
+	}
+}
+
+func mcpJSONResource(uri string, name string, title string, description string, priority float64) mcpResource {
+	return mcpResource{
+		URI:         uri,
+		Name:        name,
+		Title:       title,
+		Description: description,
+		MimeType:    "application/json",
+		Annotations: mcpResourceAnnotations(priority),
+	}
+}
+
+func mcpJSONResourceTemplate(uriTemplate string, name string, title string, description string, priority float64) mcpResourceTemplate {
+	return mcpResourceTemplate{
+		URITemplate: uriTemplate,
+		Name:        name,
+		Title:       title,
+		Description: description,
+		MimeType:    "application/json",
+		Annotations: mcpResourceAnnotations(priority),
+	}
+}
+
+func redactParameterPatches(updates []mcpParameterPatch) []map[string]any {
+	out := make([]map[string]any, 0, len(updates))
+	for _, update := range updates {
+		value := redactSecrets(update.Value)
+		if isSensitiveKey(update.Path) {
+			value = "[redacted]"
+		}
+		out = append(out, map[string]any{"path": update.Path, "value": value})
+	}
+	return out
+}
+
+func redactSecrets(v any) any {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return v
+	}
+
+	var decoded any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return v
+	}
+	return redactSecretsValue(decoded)
+}
+
+func redactSecretsValue(v any) any {
+	switch value := v.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if isSensitiveKey(key) {
+				value[key] = "[redacted]"
+				continue
+			}
+			value[key] = redactSecretsValue(child)
+		}
+		return value
+	case []any:
+		for i, child := range value {
+			value[i] = redactSecretsValue(child)
+		}
+		return value
+	default:
+		return value
+	}
+}
+
+func isSensitiveKey(key string) bool {
+	key = strings.ToLower(key)
+	return strings.Contains(key, "password") ||
+		strings.Contains(key, "token") ||
+		strings.Contains(key, "secret") ||
+		strings.Contains(key, "credential") ||
+		key == "path" ||
+		strings.HasSuffix(key, "path")
+}
+
+func mcpInstanceSelectorInputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instanceIdOrName": schemaString("ACC instance id, exact/partial server name, or previously mentioned instance. If omitted and only one running/configured instance exists, that instance is used."),
+		"instanceId":       schemaString("Backward-compatible ACCWeb instance id. Prefer instanceIdOrName for new clients."),
+	})
+}
+
+func mcpListInstancesOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instances": schemaArray("Configured ACC instances", mcpInstanceSummarySchema()),
+		"code":      schemaString("Error code when isError is true"),
+		"message":   schemaString("Error message when isError is true"),
+	})
+}
+
+func mcpInstanceStatusOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instance":           mcpInstanceRefSchema(),
+		"status":             schemaLooseObject("Runtime status, ports, clients, session and track"),
+		"sourcePaths":        schemaArray("Source configuration/live paths", schemaString("ACCWeb or ACC path")),
+		"code":               schemaString("Error code when isError is true"),
+		"message":            schemaString("Error message when isError is true"),
+		"recoveryHint":       schemaString("Recovery hint when isError is true"),
+		"availableInstances": schemaArray("Available instances when selector failed", mcpInstanceSummarySchema()),
+	})
+}
+
+func mcpInstanceWeatherOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instance": mcpInstanceRefSchema(),
+		"weather": schemaObject(map[string]any{
+			"ambientTempC":                  schemaInteger("Ambient temperature in Celsius"),
+			"trackTempC":                    schemaInteger("Track temperature in Celsius when configured"),
+			"cloudLevel":                    schemaNumber("Cloud level from 0 to 1"),
+			"rain":                          schemaNumber("Rain level from 0 to 1"),
+			"weatherRandomness":             schemaInteger("ACC weather randomness"),
+			"simracerWeatherConditions":     schemaInteger("ACC simracer weather conditions flag"),
+			"isFixedConditionQualification": schemaBoolean("Whether qualification uses fixed conditions"),
+			"summary":                       schemaString("Human-readable weather summary"),
+		}),
+		"sourcePaths":        schemaArray("Source ACC JSON paths", schemaString("ACC path")),
+		"code":               schemaString("Error code when isError is true"),
+		"message":            schemaString("Error message when isError is true"),
+		"recoveryHint":       schemaString("Recovery hint when isError is true"),
+		"availableInstances": schemaArray("Available instances when selector failed", mcpInstanceSummarySchema()),
+	})
+}
+
+func mcpInstanceTrackOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instance": mcpInstanceRefSchema(),
+		"track": schemaObject(map[string]any{
+			"configuredTrack": schemaString("Track configured in acc.event.track"),
+			"liveTrack":       schemaString("Track reported by live state when the server is running"),
+			"effectiveTrack":  schemaString("Live track when available, otherwise configured track"),
+			"summary":         schemaString("Human-readable track summary"),
+		}),
+		"sourcePaths":        schemaArray("Source configuration/live paths", schemaString("ACCWeb or ACC path")),
+		"code":               schemaString("Error code when isError is true"),
+		"message":            schemaString("Error message when isError is true"),
+		"recoveryHint":       schemaString("Recovery hint when isError is true"),
+		"availableInstances": schemaArray("Available instances when selector failed", mcpInstanceSummarySchema()),
+	})
+}
+
+func mcpInstanceConfigOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instance":           mcpInstanceRefSchema(),
+		"isRunning":          schemaBoolean("Whether the instance process is running"),
+		"pid":                schemaInteger("Process id when running"),
+		"accWeb":             schemaLooseObject("Redacted ACCWeb instance settings"),
+		"acc":                schemaLooseObject("Redacted ACC Dedicated Server JSON configuration"),
+		"live":               schemaLooseObject("Redacted live state"),
+		"redacted":           schemaArray("Names of redaction classes", schemaString("Redaction class")),
+		"code":               schemaString("Error code when isError is true"),
+		"message":            schemaString("Error message when isError is true"),
+		"recoveryHint":       schemaString("Recovery hint when isError is true"),
+		"availableInstances": schemaArray("Available instances when selector failed", mcpInstanceSummarySchema()),
+	})
+}
+
+func mcpSetParametersOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instanceId":         schemaString("ACCWeb instance id"),
+		"updated":            schemaArray("Applied updates with sensitive values redacted", schemaLooseObject("Parameter patch")),
+		"restarted":          schemaBoolean("Whether ACCWeb restarted the instance"),
+		"code":               schemaString("Error code when isError is true"),
+		"message":            schemaString("Error message when isError is true"),
+		"recoveryHint":       schemaString("Recovery hint when isError is true"),
+		"availableInstances": schemaArray("Available instances when selector failed", mcpInstanceSummarySchema()),
+	})
+}
+
+func mcpActionOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instance":           mcpInstanceRefSchema(),
+		"action":             schemaString("Action performed"),
+		"success":            schemaBoolean("Whether the action succeeded"),
+		"code":               schemaString("Error code when isError is true"),
+		"message":            schemaString("Error message when isError is true"),
+		"recoveryHint":       schemaString("Recovery hint when isError is true"),
+		"availableInstances": schemaArray("Available instances when selector failed", mcpInstanceSummarySchema()),
+	})
+}
+
+func mcpCreateQuickRaceOutputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instance": mcpInstanceRefSchema(),
+		"config":   schemaLooseObject("Redacted ACC Dedicated Server configuration for the created instance"),
+		"code":     schemaString("Error code when isError is true"),
+		"message":  schemaString("Error message when isError is true"),
+	})
+}
+
+func mcpInstanceRefSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"id":   schemaString("ACCWeb instance id"),
+		"name": schemaString("ACC server name"),
+	})
+}
+
+func mcpInstanceSummarySchema() map[string]any {
+	return schemaObject(map[string]any{
+		"id":               schemaString("ACCWeb instance id"),
+		"name":             schemaString("ACC server name"),
+		"isRunning":        schemaBoolean("Whether the process is running"),
+		"pid":              schemaInteger("Process id when running"),
+		"udpPort":          schemaInteger("UDP port"),
+		"tcpPort":          schemaInteger("TCP port"),
+		"track":            schemaString("Configured track"),
+		"serverState":      schemaString("Live server state"),
+		"nrClients":        schemaInteger("Connected clients"),
+		"sessionType":      schemaString("Current session type"),
+		"sessionPhase":     schemaString("Current session phase"),
+		"sessionRemaining": schemaInteger("Remaining session time"),
+	})
 }
 
 func schemaObject(properties map[string]any, required ...string) map[string]any {
@@ -694,8 +1302,20 @@ func schemaInteger(description string) map[string]any {
 	return map[string]any{"type": "integer", "description": description}
 }
 
+func schemaNumber(description string) map[string]any {
+	return map[string]any{"type": "number", "description": description}
+}
+
 func schemaBoolean(description string) map[string]any {
 	return map[string]any{"type": "boolean", "description": description}
+}
+
+func schemaArray(description string, items map[string]any) map[string]any {
+	return map[string]any{"type": "array", "description": description, "items": items}
+}
+
+func schemaLooseObject(description string) map[string]any {
+	return map[string]any{"type": "object", "description": description}
 }
 
 func setPathValue(cfg *instance.AccConfigFiles, path string, value any) error {

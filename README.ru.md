@@ -139,21 +139,32 @@ MCP resources:
 
 * `accweb://parameters` - справочник ACC параметров
 * `accweb://instances` - список инстансов
-* `accweb://instances/{id}/config` - полный конфиг инстанса
+* `accweb://instances/{id}/status` - статус инстанса
+* `accweb://instances/{id}/weather` - погода инстанса
+* `accweb://instances/{id}/config` - fallback-конфиг с замаскированными секретами
 
 MCP prompts:
 
+* `acc_server_overview`
+* `acc_weather_answer`
+* `acc_race_setup_summary`
+* `acc_config_explain`
 * `configure_quick_race`
 * `explain_parameter`
 
 MCP tools:
 
 * `list_instances`
+* `get_instance_status`
+* `get_instance_weather`
+* `get_instance_track`
 * `get_instance_config`
 * `set_instance_parameters`
 * `start_instance`
 * `stop_instance`
 * `create_quick_race_instance`
+
+Read-only tools отдают `annotations.readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` и `structuredContent`, поэтому совместимый MCP-клиент может не просить подтверждение для вопросов про карту, погоду и статус.
 
 Пример запроса:
 
@@ -168,7 +179,7 @@ curl -s http://SERVER_IP:8080/mcp \
 
 ## Погода, время и сессии через MCP
 
-Погода лежит в `event.json`:
+Для вопроса "какая погода?" используйте read-only tool `get_instance_weather`. Для изменения погоды значения лежат в `event.json`:
 
 ```text
 acc.event.ambientTemp
