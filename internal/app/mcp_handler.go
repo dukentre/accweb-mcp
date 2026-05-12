@@ -101,18 +101,24 @@ type mcpCreateQuickRaceArgs struct {
 }
 
 func (h *Handler) HandleMCP(c *gin.Context) {
+	c.Header("MCP-Protocol-Version", mcpProtocolVersion)
+
+	if c.Request.Method != http.MethodPost && c.Request.Method != http.MethodGet && c.Request.Method != http.MethodDelete {
+		c.Status(http.StatusMethodNotAllowed)
+		return
+	}
+
+	if !h.authorizeMCP(c) {
+		return
+	}
+
 	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodDelete {
 		c.Header("Allow", "POST")
 		c.Status(http.StatusMethodNotAllowed)
 		return
 	}
 
-	if c.Request.Method != http.MethodPost {
-		c.Status(http.StatusMethodNotAllowed)
-		return
-	}
-
-	if !h.authorizeMCP(c) {
+	if !h.validateMCPProtocolVersion(c) {
 		return
 	}
 
@@ -126,13 +132,26 @@ func (h *Handler) HandleMCP(c *gin.Context) {
 		return
 	}
 
-	c.Header("MCP-Protocol-Version", mcpProtocolVersion)
 	if req.ID == nil && strings.HasPrefix(req.Method, "notifications/") {
 		c.Status(http.StatusAccepted)
 		return
 	}
 
 	c.JSON(http.StatusOK, h.dispatchMCP(req))
+}
+
+func (h *Handler) validateMCPProtocolVersion(c *gin.Context) bool {
+	requested := c.GetHeader("MCP-Protocol-Version")
+	if requested == "" || requested == mcpProtocolVersion {
+		return true
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{
+		"error":    "unsupported MCP protocol version",
+		"version":  mcpProtocolVersion,
+		"received": requested,
+	})
+	return false
 }
 
 func (h *Handler) authorizeMCP(c *gin.Context) bool {
@@ -451,7 +470,7 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 		}
 		srv, err := h.sm.GetServerByID(args.InstanceID)
 		if err != nil {
-			return nil, err
+			return mcpToolError(err.Error()), nil
 		}
 		return mcpToolJSON(map[string]any{"id": srv.GetID(), "accWeb": srv.Cfg.Settings, "acc": srv.AccCfg, "live": srv.Live})
 	case "set_instance_parameters":
@@ -459,14 +478,18 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
 			return nil, err
 		}
-		return h.mcpSetInstanceParameters(args)
+		result, err := h.mcpSetInstanceParameters(args)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		return result, nil
 	case "start_instance":
 		var args mcpInstanceIDArgs
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
 			return nil, err
 		}
 		if err := h.sm.Start(args.InstanceID); err != nil {
-			return nil, err
+			return mcpToolError(err.Error()), nil
 		}
 		return mcpToolText("instance started: " + args.InstanceID), nil
 	case "stop_instance":
@@ -476,10 +499,10 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 		}
 		srv, err := h.sm.GetServerByID(args.InstanceID)
 		if err != nil {
-			return nil, err
+			return mcpToolError(err.Error()), nil
 		}
 		if err := srv.Stop(); err != nil {
-			return nil, err
+			return mcpToolError(err.Error()), nil
 		}
 		return mcpToolText("instance stopped: " + args.InstanceID), nil
 	case "create_quick_race_instance":
@@ -487,7 +510,11 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 		if err := json.Unmarshal(params.Arguments, &args); err != nil {
 			return nil, err
 		}
-		return h.mcpCreateQuickRaceInstance(args)
+		result, err := h.mcpCreateQuickRaceInstance(args)
+		if err != nil {
+			return mcpToolError(err.Error()), nil
+		}
+		return result, nil
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", params.Name)
 	}
@@ -610,6 +637,12 @@ func mcpToolText(text string) map[string]any {
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}}
 }
 
+func mcpToolError(text string) map[string]any {
+	result := mcpToolText(text)
+	result["isError"] = true
+	return result
+}
+
 func mcpToolJSON(v any) (map[string]any, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -619,7 +652,15 @@ func mcpToolJSON(v any) (map[string]any, error) {
 }
 
 func schemaObject(properties map[string]any, required ...string) map[string]any {
-	return map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false}
+	schema := map[string]any{
+		"type":                 "object",
+		"properties":           properties,
+		"additionalProperties": false,
+	}
+	if len(required) > 0 {
+		schema["required"] = required
+	}
+	return schema
 }
 
 func schemaString(description string) map[string]any {
