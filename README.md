@@ -119,10 +119,11 @@ The implementation uses MCP Streamable HTTP with JSON-RPC 2.0 and returns JSON r
 
 MCP capabilities:
 
-* resources: `accweb://parameters`, `accweb://instances`, `accweb://instances/{id}/status`, `accweb://instances/{id}/weather`, `accweb://instances/{id}/config`
-* resource templates for instances, status, weather and redacted config
+* resources: `accweb://parameters`, `accweb://tracks`, `accweb://instances`, `accweb://instances/{id}/status`, `accweb://instances/{id}/weather`, `accweb://instances/{id}/config`
+* resource templates for tracks, instances, status, weather and redacted config
+* completions for ACC track ids on `configure_quick_race.track` and `accweb://tracks/{trackId}`
 * prompts: `acc_server_overview`, `acc_weather_answer`, `acc_race_setup_summary`, `acc_config_explain`, plus legacy quick-race prompts
-* read-only tools: `list_instances`, `get_instance_status`, `get_instance_weather`, `get_instance_track`, `get_instance_config`
+* read-only tools: `list_tracks`, `list_instances`, `get_instance_status`, `get_instance_weather`, `get_instance_track`, `get_instance_config`
 * mutating tools: `set_instance_parameters`, `start_instance`, `stop_instance`, `create_quick_race_instance`
 
 Read-only tools include MCP annotations and structured output schemas so compatible clients can skip confirmations for safe status, track and weather questions.

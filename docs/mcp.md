@@ -80,6 +80,7 @@ The response declares these capabilities:
 * `resources`
 * `prompts`
 * `tools`
+* `completions`
 
 ## Resources
 
@@ -110,6 +111,7 @@ Read the parameter reference:
 Available resources:
 
 * `accweb://parameters` - ACC JSON parameter reference with file, path, type, description, ranges and known values
+* `accweb://tracks` - global ACC track catalog with ids, names, countries and aliases
 * `accweb://instances` - configured ACCWeb instances and runtime state
 * `accweb://instances/{id}/config` - full ACCWeb and ACC JSON configuration for one instance
 
@@ -129,6 +131,8 @@ acc.event.sessions[0].hourOfDay
 acc.eventRules.mandatoryPitstopCount
 acc.assistRules.stabilityControlLevelMax
 ```
+
+The `acc.event.track` parameter points to `allowedValuesResource: "accweb://tracks"`. Use this catalog for map/track questions. It contains track ids only, not car groups or car models.
 
 ## Prompts
 
@@ -179,6 +183,7 @@ List tools:
 
 Available tools:
 
+* `list_tracks` - returns the global ACC track catalog; no instance id is required
 * `list_instances` - returns configured instances and runtime state
 * `get_instance_status` - returns runtime state, clients, session, ports and track
 * `get_instance_weather` - returns semantic weather fields, summary and source paths
@@ -191,7 +196,7 @@ Available tools:
 
 All tools include `outputSchema`. Successful tool calls return `structuredContent` and the same JSON serialized into a text content block for backward compatibility.
 
-`list_instances`, `get_instance_status`, `get_instance_weather`, `get_instance_track`, and `get_instance_config` include:
+`list_tracks`, `list_instances`, `get_instance_status`, `get_instance_weather`, `get_instance_track`, and `get_instance_config` include:
 
 ```json
 {
@@ -218,6 +223,7 @@ If an instance is running, `set_instance_parameters` requires `restartIfLive: tr
 * `accweb://instances/{instanceId}/status`
 * `accweb://instances/{instanceId}/weather`
 * `accweb://instances/{instanceId}/config`
+* `accweb://tracks/{trackId}`
 
 Resources and templates include annotations for assistant use:
 
@@ -228,6 +234,78 @@ Resources and templates include annotations for assistant use:
 }
 ```
 
+## Track catalog and completion
+
+Read all supported ACC tracks:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "resources/read",
+  "params": {
+    "uri": "accweb://tracks"
+  }
+}
+```
+
+The payload shape is:
+
+```json
+{
+  "tracks": [
+    {
+      "id": "monza",
+      "name": "Monza",
+      "country": "Italy",
+      "aliases": ["монца", "монза"]
+    }
+  ]
+}
+```
+
+For clients that do not use resources well, call `list_tracks`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "tools/call",
+  "params": {
+    "name": "list_tracks",
+    "arguments": {}
+  }
+}
+```
+
+ACC MCP also supports `completion/complete` for track ids. Prompt argument completion:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 9,
+  "method": "completion/complete",
+  "params": {
+    "ref": { "type": "ref/prompt", "name": "configure_quick_race" },
+    "argument": { "name": "track", "value": "mo" }
+  }
+}
+```
+
+Resource template argument completion:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 10,
+  "method": "completion/complete",
+  "params": {
+    "ref": { "type": "ref/resource", "uri": "accweb://tracks/{trackId}" },
+    "argument": { "name": "trackId", "value": "сп" }
+  }
+}
+```
+
 ## Change weather
 
 For read-only weather questions, use `get_instance_weather`:
@@ -235,7 +313,7 @@ For read-only weather questions, use `get_instance_weather`:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 7,
+  "id": 11,
   "method": "tools/call",
   "params": {
     "name": "get_instance_weather",
@@ -251,7 +329,7 @@ For updates, weather is stored in `event.json` and can be changed with `set_inst
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 8,
+  "id": 12,
   "method": "tools/call",
   "params": {
     "name": "set_instance_parameters",
@@ -285,7 +363,7 @@ Time of day is configured per session:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 9,
+  "id": 13,
   "method": "tools/call",
   "params": {
     "name": "set_instance_parameters",
@@ -318,7 +396,7 @@ To add or remove sessions, set the whole `acc.event.sessions` array:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 10,
+  "id": 14,
   "method": "tools/call",
   "params": {
     "name": "set_instance_parameters",
@@ -377,7 +455,7 @@ To keep only one race session, set the array to one object:
 ```json
 {
   "jsonrpc": "2.0",
-  "id": 11,
+  "id": 15,
   "method": "tools/call",
   "params": {
     "name": "create_quick_race_instance",
