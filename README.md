@@ -1,10 +1,8 @@
 # Assetto Corsa Competizione Server Web Interface
 
-[![Discord Shield](https://discordapp.com/api/guilds/913752018588422174/widget.png?style=shield)](https://discord.gg/AVWdF56t6c)
-[![CircleCI](https://circleci.com/gh/assetto-corsa-web/accweb.svg?style=svg)](https://circleci.com/gh/assetto-corsa-web/accweb)
-[![Go Report Card](https://goreportcard.com/badge/github.com/assetto-corsa-web/accweb)](https://goreportcard.com/report/github.com/assetto-corsa-web/accweb)
+[![Go Report Card](https://goreportcard.com/badge/github.com/dukentre/accweb-mcp)](https://goreportcard.com/report/github.com/dukentre/accweb-mcp)
 
-The successor of [acweb](https://github.com/assetto-corsa-web/acweb)! accweb lets you manage your Assetto Corsa Competizione servers via a nice and simple web interface. You can start, stop and configure server instances and monitor their status.
+ACCWeb MCP is a fork of [assetto-corsa-web/accweb](https://github.com/assetto-corsa-web/accweb) for managing Assetto Corsa Competizione servers via a web interface, Docker Compose, and a token-protected MCP endpoint. You can start, stop and configure server instances, monitor their status, and let MCP clients inspect or update server parameters.
 
 ## Table of contents
 
@@ -17,7 +15,6 @@ The successor of [acweb](https://github.com/assetto-corsa-web/acweb)! accweb let
 7. [Build release](#build-release)
 8. [Links](#links)
 9. [License](#license)
-10. [ACCWeb Discord Server](#accweb-discord-server)
 
 
 ## Features
@@ -61,9 +58,36 @@ I recommend to setup an SSL certificate, but that's out of scope for this instru
 
 **Note that you have to install [wine](https://www.winehq.org/) if you're on Linux.**
 
-## Docker 
+## Docker
 
-Please visite our [Docker Hub repository](https://hub.docker.com/r/accweb/accweb) for more information.
+This fork includes a compose-based deployment for running ACCWeb with Wine.
+Place the ACC Dedicated Server files on the host and mount them into the
+container.
+
+Quick start:
+
+```shell
+cp .env.example .env
+mkdir -p accserver
+# copy the ACC Dedicated Server installation into ./accserver
+docker compose up -d --build
+```
+
+The default expected layout is:
+
+```text
+./accserver/server/accServer.exe
+```
+
+The compose stack builds `accweb/accweb`, which contains ACCWeb plus Wine.
+
+See [docs/docker.md](docs/docker.md) for the full layout, volumes, ports and
+update flow.
+
+The Docker setup also exposes a token-protected MCP endpoint at `/mcp` for
+agents and MCP clients. See [docs/mcp.md](docs/mcp.md).
+
+Upstream Docker Hub image:
 
 https://hub.docker.com/r/accweb/accweb
 
@@ -118,15 +142,11 @@ This will create a directory `releases/accweb_1.2.3` containing the release buil
 
 ## Links
 
-* [Docker Hub](https://cloud.docker.com/repository/docker/kugel/accweb/general)
+* [ACCWeb MCP repository](https://github.com/dukentre/accweb-mcp)
+* [Upstream ACCWeb repository](https://github.com/assetto-corsa-web/accweb)
+* [Upstream Docker Hub](https://hub.docker.com/r/accweb/accweb)
 * [Assetto Corsa Forums](https://www.assettocorsa.net/forum/index.php?threads/release-accweb-assetto-corsa-competizione-server-management-tool-via-web-interface.57572/)
 
 ## License
 
 MIT
-
-## ACCWeb Discord Server
-
-Join us on our Discord server to get and provide support.
-
-[![ACCWeb Discord](https://discordapp.com/api/guilds/913752018588422174/widget.png?style=banner4)](https://discord.gg/AVWdF56t6c)

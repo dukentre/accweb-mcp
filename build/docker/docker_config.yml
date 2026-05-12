@@ -17,8 +17,8 @@ auth:
   read_only_password: $ACCWEB_RO_PASSWORD
 
 acc:
-  server_path: "/accserver"
-  server_exe: accServer.exe
+  server_path: "$ACCWEB_ACC_SERVER_PATH"
+  server_exe: "$ACCWEB_ACC_SERVER_EXE"
   
 config_path: config/
 dev: false
@@ -29,6 +29,11 @@ cors:
 
 log:
   with_timestamp: $ACCWEB_LOG_WITH_TIMESTAMP
+
+mcp:
+  enabled: $ACCWEB_MCP_ENABLED
+  token: "$ACCWEB_MCP_TOKEN"
+  allowed_origins: "$ACCWEB_MCP_ALLOWED_ORIGINS"
 
 callback:
   enabled: $ACCWEB_CALLBACK_ENABLED

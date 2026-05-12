@@ -42,7 +42,8 @@ func newAccWError(msg string) AccWError {
 }
 
 type Handler struct {
-	sm *server_manager.Service
+	sm     *server_manager.Service
+	config *cfg.Config
 }
 
 func my(prefix string, fs http.FileSystem) *myFS {
@@ -98,7 +99,7 @@ func StartServer(config *cfg.Config, sM *server_manager.Service) {
 }
 
 func setupRouters(r *gin.Engine, sM *server_manager.Service, config *cfg.Config) {
-	h := Handler{sm: sM}
+	h := Handler{sm: sM, config: config}
 
 	if config.Dev {
 		basedir := "public"
@@ -114,6 +115,12 @@ func setupRouters(r *gin.Engine, sM *server_manager.Service, config *cfg.Config)
 	}
 
 	authMW := setupAuthRouters(r, config)
+
+	if config.MCP.Enabled {
+		r.GET("/mcp", h.HandleMCP)
+		r.POST("/mcp", h.HandleMCP)
+		r.DELETE("/mcp", h.HandleMCP)
+	}
 
 	api := r.Group("/api")
 	api.Use(authMW.MiddlewareFunc())

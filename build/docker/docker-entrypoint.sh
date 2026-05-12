@@ -1,10 +1,11 @@
 #!/bin/sh
+set -eu
 
-command=$1
+command=${1:-start}
 
-if [ $command = "start" ]; then
+if [ "$command" = "start" ]; then
     envsubst < docker_config.yml > config.yml
-    ./accweb
+    exec ./accweb
 else
     exec "$@"
 fi

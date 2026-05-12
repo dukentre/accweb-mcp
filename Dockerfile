@@ -1,6 +1,7 @@
 FROM golang:1.24-bookworm AS builder
 
 ARG VERSION=docker
+ARG COMMIT=unknown
 
 ENV NODE_MAJOR=16
 
@@ -17,7 +18,7 @@ WORKDIR /accweb_src
 COPY . /accweb_src
 
 # RUN rm public/dist/*
-RUN sh build/build_release.sh ${VERSION}
+RUN sh build/build_release.sh ${VERSION} ${COMMIT}
 RUN cd /accweb_src/releases && unzip accweb_${VERSION}.zip && mv accweb_${VERSION} /accweb
 
 FROM alpine:3.18
@@ -28,29 +29,43 @@ ARG VERSION=noversion
 
 RUN apk add --no-cache gettext wine ca-certificates
 
-RUN mkdir /accserver && mkdir /accweb
+RUN mkdir -p /accserver /accweb/config /accweb/secrets /sslcerts
 
 COPY --from=builder /accweb/accweb /accweb/accweb
 COPY --from=builder /accweb_src/build/docker/* /accweb/
 
 ENV ACCWEB_HOST=0.0.0.0:8080 \
+	ACCWEB_TIMEOUT=20m \
 	ACCWEB_ENABLE_TLS=false \
 	ACCWEB_CERT_FILE=/sslcerts/certificate.crt \
 	ACCWEB_PRIV_FILE=/sslcerts/private.key \
 	ACCWEB_ADMIN_PASSWORD=weakadminpassword \
 	ACCWEB_MOD_PASSWORD=weakmodpassword \
 	ACCWEB_RO_PASSWORD=weakropassword \
+	ACCWEB_ACC_SERVER_PATH=/accserver \
+	ACCWEB_ACC_SERVER_EXE=accServer.exe \
 	ACCWEB_LOGLEVEL=info \
 	ACCWEB_CORS=* \
 	ACCWEB_LOG_WITH_TIMESTAMP=true \
-	ACCWEB_CALLBACK_ENABLED=false
+	ACCWEB_MCP_ENABLED=true \
+	ACCWEB_MCP_TOKEN=change-me-mcp-token \
+	ACCWEB_MCP_ALLOWED_ORIGINS= \
+	ACCWEB_CALLBACK_ENABLED=false \
+	ACCWEB_CALLBACK_TIMEOUT=500ms \
+	ACCWEB_CALLBACK_URL= \
+	ACCWEB_CALLBACK_HEADER_KEY= \
+	ACCWEB_CALLBACK_HEADER_VALUE= \
+	ACCWEB_CALLBACK_EVENTS=
 
-VOLUME /accserver /accweb /sslcerts
+VOLUME /accserver /accweb/config /accweb/secrets /sslcerts
 
 WORKDIR /accweb
 
 EXPOSE 8080
+EXPOSE 8999/udp
+EXPOSE 9231/udp
+EXPOSE 9232/tcp
 
-ENTRYPOINT [ "sh", "/accweb/docker-entrypoint.sh" ] 
+ENTRYPOINT [ "sh", "/accweb/docker-entrypoint.sh" ]
 
 CMD [ "start" ]

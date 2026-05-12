@@ -15,4 +15,21 @@ IMG ?= accweb/accweb
 VERSION ?= dev
 TAG ?= latest
 docker-build:
-	docker build . -t $(IMG):$(TAG) --progress plain --build-arg VERSION=$(VERSION) --build-arg COMMIT=`git rev-parse HEAD` 
+	docker build . -t $(IMG):$(TAG) --progress plain --build-arg VERSION=$(VERSION) --build-arg COMMIT=`git rev-parse HEAD`
+
+docker-build-all: docker-build
+
+compose-config:
+	docker compose config
+
+compose-build:
+	docker compose build
+
+compose-up:
+	docker compose up -d --build
+
+compose-logs:
+	docker compose logs -f accweb
+
+compose-down:
+	docker compose down

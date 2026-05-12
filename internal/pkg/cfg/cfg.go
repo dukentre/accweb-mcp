@@ -28,6 +28,7 @@ type Config struct {
 	Auth       Auth      `yaml:"auth"`
 	ACC        ACC       `yaml:"acc"`
 	Log        Log       `yaml:"log"`
+	MCP        MCP       `yaml:"mcp"`
 	Callback   Callback  `yaml:"callback"`
 }
 
@@ -63,6 +64,13 @@ type ACC struct {
 
 type Log struct {
 	WithTimestamp bool `yaml:"with_timestamp"`
+}
+
+type MCP struct {
+	Enabled        bool   `yaml:"enabled"`
+	Token          string `yaml:"token"`
+	BearerToken    string `yaml:"bearer_token"`
+	AllowedOrigins string `yaml:"allowed_origins"`
 }
 
 type Callback struct {

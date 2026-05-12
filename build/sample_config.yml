@@ -61,6 +61,13 @@ cors:
 log:
   with_timestamp: true
 
+mcp:
+  enabled: true
+  # Optional bearer token for /mcp. Strongly recommended when ACCWeb is exposed outside localhost.
+  token:
+  # Comma-separated allowed Origin values for browser-based MCP clients.
+  allowed_origins:
+
 # Event System configuration.
 #
 # More info: https://github.com/assetto-corsa-web/accweb/wiki/Event-System
