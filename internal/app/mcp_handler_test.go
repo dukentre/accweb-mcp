@@ -71,6 +71,39 @@ func TestMCPToolsListInputSchemasAreValidObjects(t *testing.T) {
 	}
 }
 
+func TestMCPToolsListAnnotatesReadOnlyTools(t *testing.T) {
+	var h Handler
+	result := h.mcpToolsList()
+
+	tools, ok := result["tools"].([]mcpTool)
+	if !ok {
+		t.Fatalf("tools/list result must contain []mcpTool, got %T", result["tools"])
+	}
+
+	expectedReadOnly := map[string]bool{
+		"list_instances":      true,
+		"get_instance_config": true,
+	}
+
+	for _, tool := range tools {
+		readOnly, ok := tool.Annotations["readOnlyHint"].(bool)
+		if !ok {
+			t.Fatalf("%s must include annotations.readOnlyHint", tool.Name)
+		}
+		if readOnly != expectedReadOnly[tool.Name] {
+			t.Fatalf("%s readOnlyHint = %t, want %t", tool.Name, readOnly, expectedReadOnly[tool.Name])
+		}
+
+		openWorld, ok := tool.Annotations["openWorldHint"].(bool)
+		if !ok {
+			t.Fatalf("%s must include annotations.openWorldHint", tool.Name)
+		}
+		if openWorld {
+			t.Fatalf("%s openWorldHint must be false because ACCWeb tools operate on local server instances", tool.Name)
+		}
+	}
+}
+
 func TestMCPRejectsUnsupportedProtocolVersionHeader(t *testing.T) {
 	router := newMCPTestRouter()
 	rec := performMCPRequest(router, http.MethodPost, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, map[string]string{

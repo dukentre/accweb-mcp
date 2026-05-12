@@ -41,6 +41,7 @@ type mcpTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"inputSchema"`
+	Annotations map[string]any `json:"annotations,omitempty"`
 }
 
 type mcpResource struct {
@@ -398,11 +399,13 @@ func (h *Handler) mcpToolsList() map[string]any {
 				Name:        "list_instances",
 				Description: "List ACCWeb server instances and runtime state.",
 				InputSchema: schemaObject(map[string]any{}),
+				Annotations: mcpReadOnlyToolAnnotations(),
 			},
 			{
 				Name:        "get_instance_config",
 				Description: "Get one instance's ACCWeb and ACC configuration.",
 				InputSchema: schemaObject(map[string]any{"instanceId": schemaString("ACCWeb instance id")}, "instanceId"),
+				Annotations: mcpReadOnlyToolAnnotations(),
 			},
 			{
 				Name:        "set_instance_parameters",
@@ -419,16 +422,19 @@ func (h *Handler) mcpToolsList() map[string]any {
 						}, "path", "value"),
 					},
 				}, "instanceId", "updates"),
+				Annotations: mcpWriteToolAnnotations(true, false),
 			},
 			{
 				Name:        "start_instance",
 				Description: "Start an ACC server instance.",
 				InputSchema: schemaObject(map[string]any{"instanceId": schemaString("ACCWeb instance id")}, "instanceId"),
+				Annotations: mcpWriteToolAnnotations(false, false),
 			},
 			{
 				Name:        "stop_instance",
 				Description: "Stop an ACC server instance.",
 				InputSchema: schemaObject(map[string]any{"instanceId": schemaString("ACCWeb instance id")}, "instanceId"),
+				Annotations: mcpWriteToolAnnotations(false, true),
 			},
 			{
 				Name:        "create_quick_race_instance",
@@ -446,6 +452,7 @@ func (h *Handler) mcpToolsList() map[string]any {
 					"tcpPort":           schemaInteger("TCP port"),
 					"udpPort":           schemaInteger("UDP port"),
 				}, "serverName", "track", "carGroup", "maxCarSlots", "qualifyingMinutes", "raceMinutes"),
+				Annotations: mcpWriteToolAnnotations(false, false),
 			},
 		},
 	}
@@ -649,6 +656,22 @@ func mcpToolJSON(v any) (map[string]any, error) {
 		return nil, err
 	}
 	return mcpToolText(string(data)), nil
+}
+
+func mcpReadOnlyToolAnnotations() map[string]any {
+	return map[string]any{
+		"readOnlyHint":  true,
+		"openWorldHint": false,
+	}
+}
+
+func mcpWriteToolAnnotations(destructive bool, idempotent bool) map[string]any {
+	return map[string]any{
+		"readOnlyHint":    false,
+		"destructiveHint": destructive,
+		"idempotentHint":  idempotent,
+		"openWorldHint":   false,
+	}
 }
 
 func schemaObject(properties map[string]any, required ...string) map[string]any {

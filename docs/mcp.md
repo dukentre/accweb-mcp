@@ -186,6 +186,8 @@ Available tools:
 * `stop_instance` - stops an ACC server instance
 * `create_quick_race_instance` - creates a simple qualifying/race instance
 
+`list_instances` and `get_instance_config` include `annotations.readOnlyHint: true`, so MCP clients that trust this server can treat them as read-only calls. Mutating tools include `annotations.readOnlyHint: false`; `set_instance_parameters` is also marked with `destructiveHint: true` because it overwrites existing ACC JSON values.
+
 If an instance is running, `set_instance_parameters` requires `restartIfLive: true`. ACCWeb will stop the instance, save the configuration, and start it again.
 
 ## Change weather
