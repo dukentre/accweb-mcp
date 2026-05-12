@@ -138,6 +138,7 @@ MCP-Protocol-Version: 2025-06-18
 MCP resources:
 
 * `accweb://parameters` - справочник ACC параметров
+* `accweb://tracks` - каталог трасс ACC с id, названиями, странами и aliases
 * `accweb://instances` - список инстансов
 * `accweb://instances/{id}/status` - статус инстанса
 * `accweb://instances/{id}/weather` - погода инстанса
@@ -154,6 +155,7 @@ MCP prompts:
 
 MCP tools:
 
+* `list_tracks`
 * `list_instances`
 * `get_instance_status`
 * `get_instance_weather`
@@ -164,7 +166,9 @@ MCP tools:
 * `stop_instance`
 * `create_quick_race_instance`
 
-Read-only tools отдают `annotations.readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` и `structuredContent`, поэтому совместимый MCP-клиент может не просить подтверждение для вопросов про карту, погоду и статус.
+Read-only tools отдают `annotations.readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` и `structuredContent`, поэтому совместимый MCP-клиент может не просить подтверждение для вопросов про карты/трассы, погоду и статус.
+
+Для вопросов "какие карты/трассы есть в ACC?" используйте общий каталог `accweb://tracks` или tool `list_tracks`. Это именно список трасс, не car groups и не машины. Для `configure_quick_race.track` и `accweb://tracks/{trackId}` включен MCP `completion/complete`.
 
 Пример запроса:
 

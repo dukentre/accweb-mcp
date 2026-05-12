@@ -85,6 +85,7 @@ func TestMCPToolsListAnnotatesReadOnlyTools(t *testing.T) {
 	}
 
 	expectedReadOnly := map[string]bool{
+		"list_tracks":          true,
 		"list_instances":       true,
 		"get_instance_status":  true,
 		"get_instance_weather": true,
@@ -123,6 +124,100 @@ func TestMCPToolsListProvidesOutputSchemas(t *testing.T) {
 	for _, tool := range tools {
 		if got := tool.OutputSchema["type"]; got != "object" {
 			t.Fatalf("%s outputSchema.type must be object, got %#v", tool.Name, got)
+		}
+	}
+}
+
+func TestMCPInitializeDeclaresCompletionsCapability(t *testing.T) {
+	var h Handler
+	result := h.mcpInitialize()
+	capabilities := result["capabilities"].(map[string]any)
+	if _, ok := capabilities["completions"]; !ok {
+		t.Fatalf("initialize must declare completions capability: %#v", capabilities)
+	}
+}
+
+func TestMCPTrackCatalogResourceToolAndParameterReference(t *testing.T) {
+	config := &cfg.Config{}
+	h := Handler{config: config, sm: server_manager.New(config)}
+
+	resource, err := h.mcpResourcesRead(json.RawMessage(`{"uri":"accweb://tracks"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceData, err := json.Marshal(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceText := string(resourceData)
+	for _, expected := range []string{"monza", "spa", "nurburgring_24h"} {
+		if !strings.Contains(resourceText, expected) {
+			t.Fatalf("track catalog resource should include %s: %s", expected, resourceText)
+		}
+	}
+	for _, carGroup := range []string{"GT3", "GT4", "TCX"} {
+		if strings.Contains(resourceText, carGroup) {
+			t.Fatalf("track catalog must not include car group %s: %s", carGroup, resourceText)
+		}
+	}
+
+	tool, err := h.mcpToolsCall(json.RawMessage(`{"name":"list_tracks","arguments":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := tool["structuredContent"].(map[string]any)
+	tracks := content["tracks"].([]accTrack)
+	if len(tracks) != 25 {
+		t.Fatalf("expected 25 ACC tracks, got %d", len(tracks))
+	}
+	if tracks[0].ID == "GT3" {
+		t.Fatal("list_tracks returned a car group instead of track ids")
+	}
+
+	var trackDoc *accParameterDoc
+	docs := accParameterDocs()
+	for i, doc := range docs {
+		if doc.Path == "acc.event.track" {
+			trackDoc = &docs[i]
+			break
+		}
+	}
+	if trackDoc == nil {
+		t.Fatal("missing acc.event.track parameter doc")
+	}
+	if trackDoc.AllowedValuesResource != "accweb://tracks" {
+		t.Fatalf("acc.event.track allowedValuesResource = %q", trackDoc.AllowedValuesResource)
+	}
+}
+
+func TestMCPTrackCompletion(t *testing.T) {
+	var h Handler
+	result, err := h.mcpCompletionComplete(json.RawMessage(`{"ref":{"type":"ref/prompt","name":"configure_quick_race"},"argument":{"name":"track","value":"mo"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := result["completion"].(map[string]any)["values"].([]string)
+	if len(values) == 0 || values[0] != "monza" {
+		t.Fatalf("expected monza completion first, got %#v", values)
+	}
+
+	result, err = h.mcpCompletionComplete(json.RawMessage(`{"ref":{"type":"ref/resource","uri":"accweb://tracks/{trackId}"},"argument":{"name":"trackId","value":"сп"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values = result["completion"].(map[string]any)["values"].([]string)
+	if len(values) == 0 || values[0] != "spa" {
+		t.Fatalf("expected spa completion for Russian prefix, got %#v", values)
+	}
+
+	result, err = h.mcpCompletionComplete(json.RawMessage(`{"ref":{"type":"ref/prompt","name":"configure_quick_race"},"argument":{"name":"track","value":"GT"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values = result["completion"].(map[string]any)["values"].([]string)
+	for _, value := range values {
+		if strings.HasPrefix(value, "GT") {
+			t.Fatalf("track completion must not return car groups: %#v", values)
 		}
 	}
 }
