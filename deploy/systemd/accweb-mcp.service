@@ -1,0 +1,17 @@
+[Unit]
+Description=ACCWeb MCP Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/accweb-mcp
+ExecStart=/usr/bin/docker compose -f docker-compose.yml up -d
+ExecStop=/usr/bin/docker compose -f docker-compose.yml down
+ExecReload=/bin/sh -c '/usr/bin/docker compose -f docker-compose.yml pull && /usr/bin/docker compose -f docker-compose.yml up -d'
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

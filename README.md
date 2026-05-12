@@ -2,149 +2,209 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/dukentre/accweb-mcp)](https://goreportcard.com/report/github.com/dukentre/accweb-mcp)
 
-ACCWeb MCP is a fork of [assetto-corsa-web/accweb](https://github.com/assetto-corsa-web/accweb) for managing Assetto Corsa Competizione servers via a web interface, Docker Compose, and a token-protected MCP endpoint. You can start, stop and configure server instances, monitor their status, and let MCP clients inspect or update server parameters.
+ACCWeb MCP is a fork of [assetto-corsa-web/accweb](https://github.com/assetto-corsa-web/accweb) for managing Assetto Corsa Competizione servers through a web UI, Docker Compose, and a token-protected MCP HTTP endpoint. The fork keeps the original ACCWeb workflow, adds container-first deployment, and gives MCP clients a structured way to read and change ACC Dedicated Server configuration.
 
-## Table of contents
+## What this fork adds
 
-1. [Features](#features)
-2. [Changelog](#changelog)
-3. [Installation](#installation-and-configuration)
-4. [Docker](#docker)
-5. [Backup](#backup)
-6. [Contribute and support](#contribute-and-support)
-7. [Build release](#build-release)
-8. [Links](#links)
-9. [License](#license)
+* a Docker image with ACCWeb plus Wine for running `accServer.exe` on Linux
+* a production Compose file that uses the published image, without a local build
+* a systemd unit for running the Compose stack as a Linux service
+* a manually mounted ACC Dedicated Server folder, so Steam Guard is handled outside the container
+* an MCP endpoint at `POST /mcp` protected by `Authorization: Bearer <token>`
+* MCP resources with ACC parameter documentation and instance configuration
+* MCP prompts and tools for creating, inspecting, updating, starting and stopping instances
 
+## Production install from image
 
-## Features
+The normal server install uses the published image:
 
-* create and manage as many server instances as you like
-* configure your instances in browser
-* start/stop instances and monitor their status
-* view server logs
-* copy server configurations
-* import/export server configuration files
-* delete server configurations
-* three different permissions: admin, mod and read only (using three different passwords)
-* instance live view
-* http callback for many instance events
-* easy setup
-    * no database required
-    * simple configuration using environment variables
-    
-## Changelog
-<a name="changelog" />
+```text
+ghcr.io/dukentre/accweb-mcp:latest
+```
 
-See [CHANGELOG.md](CHANGELOG.md).
+Requirements:
 
-## Installation and configuration
+* Linux host with Docker Engine and the Docker Compose plugin
+* ACC Dedicated Server files copied manually to the host
+* open TCP/UDP ports that match your ACC server configuration
 
-accweb is installed by extracting the zip on your server, modifing the YAML configuration file to your needs and starting it in a terminal.
+Prepare the server directory:
 
-### Manuall installation
+```sh
+sudo install -d -m 0755 /opt/accweb-mcp/accserver
+```
 
-1. download the latest release from the release section on GitHub
-2. extract the zip file on your server
-3. edit the `config.yml` to match your needs
-4. open a terminal
-5. change directory to the accweb installation location
-6. start accweb using `./accweb` on Linux and `accweb.exe` on Windows
-   - By using --config (-c) you can point to an alternative `config.yml` file, e.g. `./accweb --config server1.yml`
-8. leave the terminal open (or start in background using screens on Linux for example)
-9. visit the server IP/domain and port you've configured, for example: http://example.com:8080
+Copy the ACC Dedicated Server installation into `/opt/accweb-mcp/accserver`. The default expected layout is:
 
-I recommend to setup an SSL certificate, but that's out of scope for this instructions. You can enable a certificate inside the `config.yml`.
+```text
+/opt/accweb-mcp/accserver/server/accServer.exe
+```
 
-**Note that you have to install [wine](https://www.winehq.org/) if you're on Linux.**
+Download the production Compose files:
 
-## Docker
+```sh
+sudo curl -fsSL -o /opt/accweb-mcp/docker-compose.yml \
+  https://raw.githubusercontent.com/dukentre/accweb-mcp/master/deploy/docker-compose.yml
+sudo curl -fsSL -o /opt/accweb-mcp/.env \
+  https://raw.githubusercontent.com/dukentre/accweb-mcp/master/deploy/.env.example
+```
 
-This fork includes a compose-based deployment for running ACCWeb with Wine.
-Place the ACC Dedicated Server files on the host and mount them into the
-container.
+Edit `/opt/accweb-mcp/.env` and change at least:
 
-Quick start:
+```env
+ACCWEB_ADMIN_PASSWORD=...
+ACCWEB_MOD_PASSWORD=...
+ACCWEB_RO_PASSWORD=...
+ACCWEB_MCP_TOKEN=...
+```
 
-```shell
+Start the stack:
+
+```sh
+sudo docker compose --env-file /opt/accweb-mcp/.env \
+  -f /opt/accweb-mcp/docker-compose.yml pull
+sudo docker compose --env-file /opt/accweb-mcp/.env \
+  -f /opt/accweb-mcp/docker-compose.yml up -d
+```
+
+Open ACCWeb:
+
+```text
+http://SERVER_IP:8080
+```
+
+## systemd service
+
+Install the unit:
+
+```sh
+sudo curl -fsSL -o /etc/systemd/system/accweb-mcp.service \
+  https://raw.githubusercontent.com/dukentre/accweb-mcp/master/deploy/systemd/accweb-mcp.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now accweb-mcp
+```
+
+Useful service commands:
+
+```sh
+sudo systemctl status accweb-mcp
+sudo systemctl reload accweb-mcp
+sudo systemctl stop accweb-mcp
+```
+
+`reload` pulls the current image and recreates the Compose stack.
+
+## MCP server
+
+The MCP server is the automation interface for ACCWeb. It lets MCP clients and agents discover ACC parameters as data, read instance state, and call tools that update server JSON files through ACCWeb instead of editing files by hand.
+
+Endpoint:
+
+```text
+POST http://SERVER_IP:8080/mcp
+```
+
+Required headers:
+
+```http
+Authorization: Bearer <ACCWEB_MCP_TOKEN>
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2025-06-18
+```
+
+The implementation uses MCP Streamable HTTP with JSON-RPC 2.0 and returns JSON responses. Server-to-client SSE streaming is not used; `GET /mcp` returns `405 Method Not Allowed`.
+
+MCP capabilities:
+
+* resources: `accweb://parameters`, `accweb://instances`, `accweb://instances/{id}/config`
+* prompts: `configure_quick_race`, `explain_parameter`
+* tools: `list_instances`, `get_instance_config`, `set_instance_parameters`, `start_instance`, `stop_instance`, `create_quick_race_instance`
+
+Example:
+
+```sh
+curl -s http://SERVER_IP:8080/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H 'MCP-Protocol-Version: 2025-06-18' \
+  -H "Authorization: Bearer $ACCWEB_MCP_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}'
+```
+
+See [docs/mcp.md](docs/mcp.md) for configuration, examples, weather/time changes, and multi-session updates.
+
+## Docker development
+
+The repository root `docker-compose.yml` is for local development and builds the image from the current checkout:
+
+```sh
 cp .env.example .env
 mkdir -p accserver
 # copy the ACC Dedicated Server installation into ./accserver
 docker compose up -d --build
 ```
 
-The default expected layout is:
+Use `deploy/docker-compose.yml` for production installs from the published image.
 
-```text
-./accserver/server/accServer.exe
-```
+See [docs/docker.md](docs/docker.md) for the full layout, volumes, ports, systemd setup, and update flow.
 
-The compose stack builds `accweb/accweb`, which contains ACCWeb plus Wine.
+## Original ACCWeb features
 
-See [docs/docker.md](docs/docker.md) for the full layout, volumes, ports and
-update flow.
-
-The Docker setup also exposes a token-protected MCP endpoint at `/mcp` for
-agents and MCP clients. See [docs/mcp.md](docs/mcp.md).
-
-Upstream Docker Hub image:
-
-https://hub.docker.com/r/accweb/accweb
+* create and manage multiple server instances
+* configure instances in the browser
+* start/stop instances and monitor their status
+* view server logs
+* copy server configurations
+* import/export server configuration files
+* delete server configurations
+* three permissions: admin, mod and read only
+* instance live view
+* HTTP callback for many instance events
+* no database required
 
 ## Backup
 
-To backup your files, copy and save the `config` directory as well as the `config.yml`. The `config` directory can later be placed inside the new accweb version directory and you can adjust the new `config.yml` based on your old configuration (don't overwrite it, there meight be breaking changes).
+Back up the ACCWeb configuration volume and, for manual binary installs, the `config` directory and `config.yml`. With the provided Compose files, instance data is stored in the `accweb-config` Docker volume and JWT secrets are stored in `accweb-secrets`.
 
-## Contribute and support
+## Development
 
-If you like to contribute, have questions or suggestions you can open tickets and pull requests on GitHub.
+The frontend is in `public` and the Go backend is in `internal`.
 
-All Go code must have been run through go fmt. The frontend and backend changes must be (manually) tested on your system. If you have issues running it locally open a ticket.
+Frontend watcher:
 
-To run the accweb locally is really simple, make sure that the attribute `dev` is set to true in your `config.yml` file.
-
-### Frontend development environment
-
-Our current frontend was built using Vue.js and can be found inside `public` directory.
-
-To run the watcher use the following command.
-
-```shell
+```sh
 make run-dev-frontend
 ```
-Then when you edit any js file, the watcher will detect and rebuild the js package.
 
-### Backend development environment
+Backend:
 
-ACCweb backend is running over golang and can be found inside `internal` directory.
-
-Use the following command to run the backend on your terminal.
-
-```shell
+```sh
 make run-dev-backend
 ```
-Keep in mind that you need to restart the command for see the changes that you made in the code working (or not :zany_face:) 
 
-### Visual Studio Code - Remote container
+Local checks:
 
-There is a pre-built development environment setup for ACCWeb for Visual Studio Code and Remote Containers. Please, check here how to setup and use: https://code.visualstudio.com/docs/remote/containers
+```sh
+go test ./internal/app ./cmd
+```
 
 ## Build release
 
-To build a release, execute the `build_release.sh` script (on Linux) or follow the steps inside the script. You need to pass the build version as the first parameter. Example:
-To build a release, execute the `build_release.sh` script (on Linux) or follow the steps inside the script. You need to pass the build version as the first parameter. Example:
+To build a zip release locally:
 
-```shell
+```sh
 ./build/build_release.sh 1.2.3
 ```
 
-This will create a directory `releases/accweb_1.2.3` containing the release build of accweb. This directory can be zipped, uploaded to GitHub and deployed on a server.
+Docker images are published by GitHub Actions to GHCR on `master` and `v*` tags.
 
 ## Links
 
 * [ACCWeb MCP repository](https://github.com/dukentre/accweb-mcp)
+* [Published Docker image](https://github.com/dukentre/accweb-mcp/pkgs/container/accweb-mcp)
 * [Upstream ACCWeb repository](https://github.com/assetto-corsa-web/accweb)
-* [Upstream Docker Hub](https://hub.docker.com/r/accweb/accweb)
+* [Upstream Docker Hub image](https://hub.docker.com/r/accweb/accweb)
 * [Assetto Corsa Forums](https://www.assettocorsa.net/forum/index.php?threads/release-accweb-assetto-corsa-competizione-server-management-tool-via-web-interface.57572/)
 
 ## License
