@@ -234,6 +234,37 @@ func TestMCPTrackCompletion(t *testing.T) {
 	}
 }
 
+func TestWaitForMCPInstanceStoppedWaitsUntilProcessStateClears(t *testing.T) {
+	fake := &fakeMCPRunningInstance{runningResponses: 2}
+
+	err := waitForMCPInstanceStopped(fake, 50*time.Millisecond, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.calls < 3 {
+		t.Fatalf("expected polling until IsRunning becomes false, got %d calls", fake.calls)
+	}
+}
+
+func TestWaitForMCPInstanceStoppedTimeout(t *testing.T) {
+	fake := &fakeMCPRunningInstance{runningResponses: 100}
+
+	err := waitForMCPInstanceStopped(fake, 2*time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout while instance remains running")
+	}
+}
+
+type fakeMCPRunningInstance struct {
+	calls            int
+	runningResponses int
+}
+
+func (f *fakeMCPRunningInstance) IsRunning() bool {
+	f.calls++
+	return f.calls <= f.runningResponses
+}
+
 func TestMCPRejectsUnsupportedProtocolVersionHeader(t *testing.T) {
 	router := newMCPTestRouter()
 	rec := performMCPRequest(router, http.MethodPost, `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, map[string]string{

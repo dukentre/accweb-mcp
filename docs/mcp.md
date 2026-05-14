@@ -213,7 +213,7 @@ Read-only tools accept `instanceIdOrName` instead of requiring a strict id. It c
 
 If an instance selector cannot be resolved, tools return `isError: true` with actionable `structuredContent`, including `code`, `message`, `recoveryHint`, and `availableInstances` when useful.
 
-If an instance is running, `set_instance_parameters` requires `restartIfLive: true`. ACCWeb will stop the instance, save the configuration, and start it again.
+If an instance is running, `set_instance_parameters` requires `restartIfLive: true`. ACCWeb will stop the instance, wait until the process is fully stopped, save the configuration, and start it again.
 
 ## Resource templates
 

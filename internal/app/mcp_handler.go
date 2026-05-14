@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/assetto-corsa-web/accweb/internal/pkg/instance"
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,9 @@ import (
 const (
 	mcpProtocolVersion = "2025-06-18"
 	mcpEndpointPath    = "/mcp"
+
+	mcpRestartStopTimeout      = 15 * time.Second
+	mcpRestartStopPollInterval = 100 * time.Millisecond
 )
 
 type mcpRequest struct {
@@ -586,10 +590,10 @@ func (h *Handler) mcpToolsList() map[string]any {
 			{
 				Name:        "set_instance_parameters",
 				Title:       "Set ACC parameters",
-				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. The instance must be stopped unless restartIfLive is true.",
+				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. The instance must be stopped unless restartIfLive is true; with restartIfLive, MCP stops the process, waits until it is fully stopped, saves the config, then starts it again.",
 				InputSchema: schemaObject(map[string]any{
 					"instanceId":    schemaString("ACCWeb instance id"),
-					"restartIfLive": schemaBoolean("Stop the instance before saving and restart it afterwards"),
+					"restartIfLive": schemaBoolean("When true and the instance is running, stop it, wait until stopped, save changes, and start it again"),
 					"updates": map[string]any{
 						"type":        "array",
 						"description": "Parameter updates",
@@ -759,7 +763,10 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 			return mcpToolErrorStructured("instance_running", "Instance is running; set restartIfLive=true to stop, save and restart.", "Call set_instance_parameters again with restartIfLive=true, or stop the instance first.", h.mcpInstanceSummaries()), nil
 		}
 		if err := srv.Stop(); err != nil {
-			return nil, err
+			return mcpToolErrorStructured("stop_failed", err.Error(), "Call get_instance_status, then stop_instance manually if it is still running.", h.mcpInstanceSummaries()), nil
+		}
+		if err := waitForMCPInstanceStopped(srv, mcpRestartStopTimeout, mcpRestartStopPollInterval); err != nil {
+			return mcpToolErrorStructured("stop_timeout", err.Error(), "Call get_instance_status, then stop_instance manually and retry set_instance_parameters.", h.mcpInstanceSummaries()), nil
 		}
 	}
 
@@ -777,11 +784,32 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 
 	if wasRunning {
 		if err := h.sm.Start(args.InstanceID); err != nil {
-			return nil, err
+			return mcpToolErrorStructured("restart_failed", err.Error(), "Configuration was saved, but restart failed. Check server files and ports, then call start_instance.", h.mcpInstanceSummaries()), nil
 		}
 	}
 
 	return mcpToolStructured(map[string]any{"updated": redactParameterPatches(args.Updates), "restarted": wasRunning, "instanceId": args.InstanceID})
+}
+
+func waitForMCPInstanceStopped(srv interface{ IsRunning() bool }, timeout, pollInterval time.Duration) error {
+	if waitForMCPCondition(timeout, pollInterval, func() bool { return !srv.IsRunning() }) {
+		return nil
+	}
+	return fmt.Errorf("instance did not stop within %s", timeout)
+}
+
+func waitForMCPCondition(timeout, pollInterval time.Duration, done func() bool) bool {
+	if done() {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		if done() {
+			return true
+		}
+	}
+	return done()
 }
 
 func (h *Handler) mcpCreateQuickRaceInstance(args mcpCreateQuickRaceArgs) (map[string]any, error) {
