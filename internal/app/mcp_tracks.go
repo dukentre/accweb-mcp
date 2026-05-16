@@ -42,18 +42,26 @@ func accTracks() []accTrack {
 		{ID: "watkins_glen", Name: "Watkins Glen International", Country: "United States", Aliases: []string{"watkins glen", "уоткинс глен"}},
 		{ID: "valencia", Name: "Circuit Ricardo Tormo", Country: "Spain", Aliases: []string{"valencia", "ricardo tormo", "валенсия"}},
 		{ID: "red_bull_ring", Name: "Red Bull Ring", Country: "Austria", Aliases: []string{"red bull ring", "ред булл ринг", "шпильберг", "spielberg"}},
-		{ID: "nurburgring_24h", Name: "24H Nurburgring", Country: "Germany", Aliases: []string{"nürburgring 24h", "nurburgring 24h", "nordschleife", "нюрбургринг 24", "нордшляйфе"}},
+		{ID: "nurburgring_24h", Name: "24H Nurburgring", Country: "Germany", Aliases: []string{"nürburgring 24h", "nurburgring 24h", "24 hours nurburgring", "nordschleife", "northern loop", "north loop", "северная петля", "24 часа нюрбургринг", "нюрбургринг 24", "нордшляйфе"}},
 	}
 }
 
 func findACCTrack(id string) (accTrack, bool) {
 	needle := normalizeTrackCompletionValue(id)
 	for _, track := range accTracks() {
-		if normalizeTrackCompletionValue(track.ID) == needle {
-			return track, true
+		for _, candidate := range accTrackCandidateValues(track) {
+			if normalizeTrackCompletionValue(candidate) == needle {
+				return track, true
+			}
 		}
 	}
 	return accTrack{}, false
+}
+
+func accTrackCandidateValues(track accTrack) []string {
+	candidates := []string{track.ID, track.Name}
+	candidates = append(candidates, track.Aliases...)
+	return candidates
 }
 
 func completeACCTrackIDs(value string) []string {

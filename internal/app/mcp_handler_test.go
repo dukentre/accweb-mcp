@@ -234,6 +234,61 @@ func TestMCPTrackCompletion(t *testing.T) {
 	}
 }
 
+func TestACCTrackAliasesResolveNurburgring24H(t *testing.T) {
+	for _, alias := range []string{
+		"северная петля",
+		"нордшляйфе",
+		"nordschleife",
+		"24 часа нюрбургринг",
+		"nurburgring 24h",
+	} {
+		track, ok := findACCTrack(alias)
+		if !ok {
+			t.Fatalf("expected alias %q to resolve", alias)
+		}
+		if track.ID != "nurburgring_24h" {
+			t.Fatalf("alias %q resolved to %s, want nurburgring_24h", alias, track.ID)
+		}
+	}
+}
+
+func TestNormalizeMCPParameterPatchesCanonicalizesTrackAliases(t *testing.T) {
+	updates, err := normalizeMCPParameterPatches([]mcpParameterPatch{
+		{Path: "acc.event.track", Value: "северная петля"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 || updates[0].Path != "acc.event.track" || updates[0].Value != "nurburgring_24h" {
+		t.Fatalf("unexpected normalized updates: %#v", updates)
+	}
+}
+
+func TestNormalizeMCPParameterPatchesMapsTrackConfigNorthToNurburgring24H(t *testing.T) {
+	updates, err := normalizeMCPParameterPatches([]mcpParameterPatch{
+		{Path: "acc.event.track", Value: "monza"},
+		{Path: "acc.event.trackConfig", Value: "north"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected trackConfig to be folded into acc.event.track, got %#v", updates)
+	}
+	if updates[0].Path != "acc.event.track" || updates[0].Value != "nurburgring_24h" {
+		t.Fatalf("unexpected normalized updates: %#v", updates)
+	}
+}
+
+func TestNormalizeMCPParameterPatchesRejectsUnknownTrack(t *testing.T) {
+	_, err := normalizeMCPParameterPatches([]mcpParameterPatch{
+		{Path: "acc.event.track", Value: "bank card"},
+	})
+	if err == nil {
+		t.Fatal("expected unknown track to be rejected before side effects")
+	}
+}
+
 func TestWaitForMCPInstanceStoppedWaitsUntilProcessStateClears(t *testing.T) {
 	fake := &fakeMCPRunningInstance{runningResponses: 2}
 

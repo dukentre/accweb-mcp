@@ -134,6 +134,8 @@ acc.assistRules.stabilityControlLevelMax
 
 The `acc.event.track` parameter points to `allowedValuesResource: "accweb://tracks"`. Use this catalog for map/track questions. It contains track ids only, not car groups or car models.
 
+`set_instance_parameters` normalizes known track aliases before saving. For example, `северная петля`, `нордшляйфе`, `nordschleife`, `24 часа нюрбургринг`, and `nurburgring 24h` are saved as `acc.event.track = "nurburgring_24h"`. Do not use `acc.event.trackConfig`; ACC expects the canonical track id in `acc.event.track`.
+
 ## Prompts
 
 List prompts:

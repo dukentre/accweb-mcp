@@ -590,7 +590,7 @@ func (h *Handler) mcpToolsList() map[string]any {
 			{
 				Name:        "set_instance_parameters",
 				Title:       "Set ACC parameters",
-				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. The instance must be stopped unless restartIfLive is true; with restartIfLive, MCP stops the process, waits until it is fully stopped, saves the config, then starts it again.",
+				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. Track aliases for acc.event.track are normalized to canonical ACC track ids before saving, for example nordschleife and северная петля become nurburgring_24h. Do not use acc.event.trackConfig. The instance must be stopped unless restartIfLive is true; with restartIfLive, MCP stops the process, waits until it is fully stopped, saves the config, then starts it again.",
 				InputSchema: schemaObject(map[string]any{
 					"instanceId":    schemaString("ACCWeb instance id"),
 					"restartIfLive": schemaBoolean("When true and the instance is running, stop it, wait until stopped, save changes, and start it again"),
@@ -757,6 +757,12 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 		return mcpToolErrorStructured("instance_not_found", "No ACC instance matched '"+args.InstanceID+"'", "Call list_instances or use one of availableInstances.", h.mcpInstanceSummaries()), nil
 	}
 
+	normalizedUpdates, err := normalizeMCPParameterPatches(args.Updates)
+	if err != nil {
+		return mcpToolErrorStructured("invalid_parameter_update", err.Error(), "Use acc.event.track with a valid track id or alias from accweb://tracks.", h.mcpInstanceSummaries()), nil
+	}
+	args.Updates = normalizedUpdates
+
 	wasRunning := srv.IsRunning()
 	if wasRunning {
 		if !args.RestartIfLive {
@@ -789,6 +795,72 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 	}
 
 	return mcpToolStructured(map[string]any{"updated": redactParameterPatches(args.Updates), "restarted": wasRunning, "instanceId": args.InstanceID})
+}
+
+func normalizeMCPParameterPatches(updates []mcpParameterPatch) ([]mcpParameterPatch, error) {
+	normalized := make([]mcpParameterPatch, 0, len(updates))
+	var trackOverride string
+
+	for _, update := range updates {
+		update.Path = strings.TrimSpace(update.Path)
+		switch update.Path {
+		case "acc.event.track":
+			value, err := normalizeACCTrackUpdateValue(update.Value)
+			if err != nil {
+				return nil, err
+			}
+			update.Value = value
+			normalized = append(normalized, update)
+		case "acc.event.trackConfig":
+			track, ok := resolveACCTrackConfigAlias(update.Value)
+			if !ok {
+				return nil, errors.New("acc.event.trackConfig is not an ACC server parameter; set acc.event.track to a track id from accweb://tracks")
+			}
+			trackOverride = track.ID
+		default:
+			normalized = append(normalized, update)
+		}
+	}
+
+	if trackOverride != "" {
+		replaced := false
+		for i := range normalized {
+			if normalized[i].Path == "acc.event.track" {
+				normalized[i].Value = trackOverride
+				replaced = true
+			}
+		}
+		if !replaced {
+			normalized = append(normalized, mcpParameterPatch{Path: "acc.event.track", Value: trackOverride})
+		}
+	}
+
+	return normalized, nil
+}
+
+func normalizeACCTrackUpdateValue(value any) (any, error) {
+	trackValue, ok := value.(string)
+	if !ok {
+		return value, nil
+	}
+	track, ok := findACCTrack(trackValue)
+	if !ok {
+		return nil, fmt.Errorf("unknown ACC track %q", trackValue)
+	}
+	return track.ID, nil
+}
+
+func resolveACCTrackConfigAlias(value any) (accTrack, bool) {
+	trackConfig, ok := value.(string)
+	if !ok {
+		return accTrack{}, false
+	}
+	switch normalizeTrackCompletionValue(trackConfig) {
+	case "north", "nord", "northern", "northern loop", "north loop", "nordschleife", "северная петля", "нордшляйфе":
+		return findACCTrack("nurburgring_24h")
+	default:
+		return accTrack{}, false
+	}
 }
 
 func waitForMCPInstanceStopped(srv interface{ IsRunning() bool }, timeout, pollInterval time.Duration) error {
