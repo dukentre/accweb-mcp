@@ -42,18 +42,26 @@ func accTracks() []accTrack {
 		{ID: "watkins_glen", Name: "Watkins Glen International", Country: "United States", Aliases: []string{"watkins glen", "уоткинс глен"}},
 		{ID: "valencia", Name: "Circuit Ricardo Tormo", Country: "Spain", Aliases: []string{"valencia", "ricardo tormo", "валенсия"}},
 		{ID: "red_bull_ring", Name: "Red Bull Ring", Country: "Austria", Aliases: []string{"red bull ring", "ред булл ринг", "шпильберг", "spielberg"}},
-		{ID: "nurburgring_24h", Name: "24H Nurburgring", Country: "Germany", Aliases: []string{"nürburgring 24h", "nurburgring 24h", "nordschleife", "нюрбургринг 24", "нордшляйфе"}},
+		{ID: "nurburgring_24h", Name: "24H Nurburgring", Country: "Germany", Aliases: []string{"nürburgring 24h", "nurburgring 24h", "24 hours nurburgring", "nordschleife", "northern loop", "north loop", "северная петля", "24 часа нюрбургринг", "нюрбургринг 24", "нордшляйфе"}},
 	}
 }
 
 func findACCTrack(id string) (accTrack, bool) {
 	needle := normalizeTrackCompletionValue(id)
 	for _, track := range accTracks() {
-		if normalizeTrackCompletionValue(track.ID) == needle {
-			return track, true
+		for _, candidate := range accTrackCandidateValues(track) {
+			if normalizeTrackCompletionValue(candidate) == needle {
+				return track, true
+			}
 		}
 	}
 	return accTrack{}, false
+}
+
+func accTrackCandidateValues(track accTrack) []string {
+	candidates := []string{track.ID, track.Name}
+	candidates = append(candidates, track.Aliases...)
+	return candidates
 }
 
 func completeACCTrackIDs(value string) []string {
@@ -88,27 +96,34 @@ type trackCompletionMatch struct {
 }
 
 func trackCompletionScore(track accTrack, value string) (int, bool) {
-	candidates := append([]string{track.ID, track.Name}, track.Aliases...)
 	if value == "" {
 		return 10, true
 	}
 
 	best := 100
-	for _, candidate := range candidates {
-		candidate = normalizeTrackCompletionValue(candidate)
-		switch {
-		case candidate == value:
-			best = min(best, 0)
-		case strings.HasPrefix(candidate, value):
-			best = min(best, 1)
-		case strings.Contains(candidate, value):
-			best = min(best, 2)
-		}
+	best = min(best, completionCandidateScore(track.ID, value, 0, 1, 5))
+	best = min(best, completionCandidateScore(track.Name, value, 2, 3, 6))
+	for _, alias := range track.Aliases {
+		best = min(best, completionCandidateScore(alias, value, 2, 4, 6))
 	}
 	if best == 100 {
 		return 0, false
 	}
 	return best, true
+}
+
+func completionCandidateScore(candidate, value string, exactScore, prefixScore, containsScore int) int {
+	candidate = normalizeTrackCompletionValue(candidate)
+	switch {
+	case candidate == value:
+		return exactScore
+	case strings.HasPrefix(candidate, value):
+		return prefixScore
+	case len([]rune(value)) >= 3 && strings.Contains(candidate, value):
+		return containsScore
+	default:
+		return 100
+	}
 }
 
 func normalizeTrackCompletionValue(value string) string {

@@ -201,6 +201,15 @@ func TestMCPTrackCompletion(t *testing.T) {
 		t.Fatalf("expected monza completion first, got %#v", values)
 	}
 
+	result, err = h.mcpCompletionComplete(json.RawMessage(`{"ref":{"type":"ref/resource","uri":"accweb://tracks/{trackId}"},"argument":{"name":"trackId","value":"sp"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	values = result["completion"].(map[string]any)["values"].([]string)
+	if len(values) == 0 || values[0] != "spa" {
+		t.Fatalf("expected canonical spa id completion before aliases, got %#v", values)
+	}
+
 	result, err = h.mcpCompletionComplete(json.RawMessage(`{"ref":{"type":"ref/resource","uri":"accweb://tracks/{trackId}"},"argument":{"name":"trackId","value":"сп"}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -215,11 +224,100 @@ func TestMCPTrackCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	values = result["completion"].(map[string]any)["values"].([]string)
+	if len(values) != 0 {
+		t.Fatalf("short GT prefix must not match tracks by substring or return car groups: %#v", values)
+	}
 	for _, value := range values {
 		if strings.HasPrefix(value, "GT") {
 			t.Fatalf("track completion must not return car groups: %#v", values)
 		}
 	}
+}
+
+func TestACCTrackAliasesResolveNurburgring24H(t *testing.T) {
+	for _, alias := range []string{
+		"северная петля",
+		"нордшляйфе",
+		"nordschleife",
+		"24 часа нюрбургринг",
+		"nurburgring 24h",
+	} {
+		track, ok := findACCTrack(alias)
+		if !ok {
+			t.Fatalf("expected alias %q to resolve", alias)
+		}
+		if track.ID != "nurburgring_24h" {
+			t.Fatalf("alias %q resolved to %s, want nurburgring_24h", alias, track.ID)
+		}
+	}
+}
+
+func TestNormalizeMCPParameterPatchesCanonicalizesTrackAliases(t *testing.T) {
+	updates, err := normalizeMCPParameterPatches([]mcpParameterPatch{
+		{Path: "acc.event.track", Value: "северная петля"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 || updates[0].Path != "acc.event.track" || updates[0].Value != "nurburgring_24h" {
+		t.Fatalf("unexpected normalized updates: %#v", updates)
+	}
+}
+
+func TestNormalizeMCPParameterPatchesMapsTrackConfigNorthToNurburgring24H(t *testing.T) {
+	updates, err := normalizeMCPParameterPatches([]mcpParameterPatch{
+		{Path: "acc.event.track", Value: "monza"},
+		{Path: "acc.event.trackConfig", Value: "north"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected trackConfig to be folded into acc.event.track, got %#v", updates)
+	}
+	if updates[0].Path != "acc.event.track" || updates[0].Value != "nurburgring_24h" {
+		t.Fatalf("unexpected normalized updates: %#v", updates)
+	}
+}
+
+func TestNormalizeMCPParameterPatchesRejectsUnknownTrack(t *testing.T) {
+	_, err := normalizeMCPParameterPatches([]mcpParameterPatch{
+		{Path: "acc.event.track", Value: "bank card"},
+	})
+	if err == nil {
+		t.Fatal("expected unknown track to be rejected before side effects")
+	}
+}
+
+func TestWaitForMCPInstanceStoppedWaitsUntilProcessStateClears(t *testing.T) {
+	fake := &fakeMCPRunningInstance{runningResponses: 2}
+
+	err := waitForMCPInstanceStopped(fake, 50*time.Millisecond, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fake.calls < 3 {
+		t.Fatalf("expected polling until IsRunning becomes false, got %d calls", fake.calls)
+	}
+}
+
+func TestWaitForMCPInstanceStoppedTimeout(t *testing.T) {
+	fake := &fakeMCPRunningInstance{runningResponses: 100}
+
+	err := waitForMCPInstanceStopped(fake, 2*time.Millisecond, time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout while instance remains running")
+	}
+}
+
+type fakeMCPRunningInstance struct {
+	calls            int
+	runningResponses int
+}
+
+func (f *fakeMCPRunningInstance) IsRunning() bool {
+	f.calls++
+	return f.calls <= f.runningResponses
 }
 
 func TestMCPRejectsUnsupportedProtocolVersionHeader(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/assetto-corsa-web/accweb/internal/pkg/instance"
 	"github.com/gin-gonic/gin"
@@ -17,6 +18,9 @@ import (
 const (
 	mcpProtocolVersion = "2025-06-18"
 	mcpEndpointPath    = "/mcp"
+
+	mcpRestartStopTimeout      = 15 * time.Second
+	mcpRestartStopPollInterval = 100 * time.Millisecond
 )
 
 type mcpRequest struct {
@@ -586,10 +590,10 @@ func (h *Handler) mcpToolsList() map[string]any {
 			{
 				Name:        "set_instance_parameters",
 				Title:       "Set ACC parameters",
-				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. The instance must be stopped unless restartIfLive is true.",
+				Description: "Update one or more ACC configuration parameters using paths like acc.settings.maxCarSlots or acc.event.sessions[0].sessionDurationMinutes. Track aliases for acc.event.track are normalized to canonical ACC track ids before saving, for example nordschleife and северная петля become nurburgring_24h. Do not use acc.event.trackConfig. The instance must be stopped unless restartIfLive is true; with restartIfLive, MCP stops the process, waits until it is fully stopped, saves the config, then starts it again.",
 				InputSchema: schemaObject(map[string]any{
 					"instanceId":    schemaString("ACCWeb instance id"),
-					"restartIfLive": schemaBoolean("Stop the instance before saving and restart it afterwards"),
+					"restartIfLive": schemaBoolean("When true and the instance is running, stop it, wait until stopped, save changes, and start it again"),
 					"updates": map[string]any{
 						"type":        "array",
 						"description": "Parameter updates",
@@ -753,13 +757,22 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 		return mcpToolErrorStructured("instance_not_found", "No ACC instance matched '"+args.InstanceID+"'", "Call list_instances or use one of availableInstances.", h.mcpInstanceSummaries()), nil
 	}
 
+	normalizedUpdates, err := normalizeMCPParameterPatches(args.Updates)
+	if err != nil {
+		return mcpToolErrorStructured("invalid_parameter_update", err.Error(), "Use acc.event.track with a valid track id or alias from accweb://tracks.", h.mcpInstanceSummaries()), nil
+	}
+	args.Updates = normalizedUpdates
+
 	wasRunning := srv.IsRunning()
 	if wasRunning {
 		if !args.RestartIfLive {
 			return mcpToolErrorStructured("instance_running", "Instance is running; set restartIfLive=true to stop, save and restart.", "Call set_instance_parameters again with restartIfLive=true, or stop the instance first.", h.mcpInstanceSummaries()), nil
 		}
 		if err := srv.Stop(); err != nil {
-			return nil, err
+			return mcpToolErrorStructured("stop_failed", err.Error(), "Call get_instance_status, then stop_instance manually if it is still running.", h.mcpInstanceSummaries()), nil
+		}
+		if err := waitForMCPInstanceStopped(srv, mcpRestartStopTimeout, mcpRestartStopPollInterval); err != nil {
+			return mcpToolErrorStructured("stop_timeout", err.Error(), "Call get_instance_status, then stop_instance manually and retry set_instance_parameters.", h.mcpInstanceSummaries()), nil
 		}
 	}
 
@@ -777,11 +790,98 @@ func (h *Handler) mcpSetInstanceParameters(args mcpSetParametersArgs) (map[strin
 
 	if wasRunning {
 		if err := h.sm.Start(args.InstanceID); err != nil {
-			return nil, err
+			return mcpToolErrorStructured("restart_failed", err.Error(), "Configuration was saved, but restart failed. Check server files and ports, then call start_instance.", h.mcpInstanceSummaries()), nil
 		}
 	}
 
 	return mcpToolStructured(map[string]any{"updated": redactParameterPatches(args.Updates), "restarted": wasRunning, "instanceId": args.InstanceID})
+}
+
+func normalizeMCPParameterPatches(updates []mcpParameterPatch) ([]mcpParameterPatch, error) {
+	normalized := make([]mcpParameterPatch, 0, len(updates))
+	var trackOverride string
+
+	for _, update := range updates {
+		update.Path = strings.TrimSpace(update.Path)
+		switch update.Path {
+		case "acc.event.track":
+			value, err := normalizeACCTrackUpdateValue(update.Value)
+			if err != nil {
+				return nil, err
+			}
+			update.Value = value
+			normalized = append(normalized, update)
+		case "acc.event.trackConfig":
+			track, ok := resolveACCTrackConfigAlias(update.Value)
+			if !ok {
+				return nil, errors.New("acc.event.trackConfig is not an ACC server parameter; set acc.event.track to a track id from accweb://tracks")
+			}
+			trackOverride = track.ID
+		default:
+			normalized = append(normalized, update)
+		}
+	}
+
+	if trackOverride != "" {
+		replaced := false
+		for i := range normalized {
+			if normalized[i].Path == "acc.event.track" {
+				normalized[i].Value = trackOverride
+				replaced = true
+			}
+		}
+		if !replaced {
+			normalized = append(normalized, mcpParameterPatch{Path: "acc.event.track", Value: trackOverride})
+		}
+	}
+
+	return normalized, nil
+}
+
+func normalizeACCTrackUpdateValue(value any) (any, error) {
+	trackValue, ok := value.(string)
+	if !ok {
+		return value, nil
+	}
+	track, ok := findACCTrack(trackValue)
+	if !ok {
+		return nil, fmt.Errorf("unknown ACC track %q", trackValue)
+	}
+	return track.ID, nil
+}
+
+func resolveACCTrackConfigAlias(value any) (accTrack, bool) {
+	trackConfig, ok := value.(string)
+	if !ok {
+		return accTrack{}, false
+	}
+	switch normalizeTrackCompletionValue(trackConfig) {
+	case "north", "nord", "northern", "northern loop", "north loop", "nordschleife", "северная петля", "нордшляйфе":
+		return findACCTrack("nurburgring_24h")
+	default:
+		return accTrack{}, false
+	}
+}
+
+func waitForMCPInstanceStopped(srv interface{ IsRunning() bool }, timeout, pollInterval time.Duration) error {
+	if waitForMCPCondition(timeout, pollInterval, func() bool { return !srv.IsRunning() }) {
+		return nil
+	}
+	return fmt.Errorf("instance did not stop within %s", timeout)
+}
+
+func waitForMCPCondition(timeout, pollInterval time.Duration, done func() bool) bool {
+	if done() {
+		return true
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(pollInterval)
+		if done() {
+			return true
+		}
+	}
+	return done()
 }
 
 func (h *Handler) mcpCreateQuickRaceInstance(args mcpCreateQuickRaceArgs) (map[string]any, error) {

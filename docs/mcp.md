@@ -134,6 +134,8 @@ acc.assistRules.stabilityControlLevelMax
 
 The `acc.event.track` parameter points to `allowedValuesResource: "accweb://tracks"`. Use this catalog for map/track questions. It contains track ids only, not car groups or car models.
 
+`set_instance_parameters` normalizes known track aliases before saving. For example, `северная петля`, `нордшляйфе`, `nordschleife`, `24 часа нюрбургринг`, and `nurburgring 24h` are saved as `acc.event.track = "nurburgring_24h"`. Do not use `acc.event.trackConfig`; ACC expects the canonical track id in `acc.event.track`.
+
 ## Prompts
 
 List prompts:
@@ -213,7 +215,7 @@ Read-only tools accept `instanceIdOrName` instead of requiring a strict id. It c
 
 If an instance selector cannot be resolved, tools return `isError: true` with actionable `structuredContent`, including `code`, `message`, `recoveryHint`, and `availableInstances` when useful.
 
-If an instance is running, `set_instance_parameters` requires `restartIfLive: true`. ACCWeb will stop the instance, save the configuration, and start it again.
+If an instance is running, `set_instance_parameters` requires `restartIfLive: true`. ACCWeb will stop the instance, wait until the process is fully stopped, save the configuration, and start it again.
 
 ## Resource templates
 
