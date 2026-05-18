@@ -124,9 +124,9 @@ MCP capabilities:
 * completions for ACC track ids on `configure_quick_race.track` and `accweb://tracks/{trackId}`
 * prompts: `acc_server_overview`, `acc_weather_answer`, `acc_race_setup_summary`, `acc_config_explain`, plus legacy quick-race prompts
 * read-only tools: `list_tracks`, `list_instances`, `get_instance_status`, `get_instance_weather`, `get_instance_track`, `get_instance_config`
-* mutating tools: `set_instance_parameters`, `start_instance`, `stop_instance`, `create_quick_race_instance`
+* mutating tools: `set_instance_parameters`, `start_instance`, `stop_instance`, `delete_instance`, `create_quick_race_instance`
 
-Read-only tools include MCP annotations and structured output schemas so compatible clients can skip confirmations for safe status, track and weather questions.
+Read-only tools include MCP annotations and structured output schemas so compatible clients can skip confirmations for safe status, track and weather questions. `delete_instance` is marked destructive and requires an explicit `instanceIdOrName`.
 
 Example:
 

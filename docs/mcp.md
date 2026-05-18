@@ -194,6 +194,7 @@ Available tools:
 * `set_instance_parameters` - updates one or more ACC JSON values by path
 * `start_instance` - starts an ACC server instance
 * `stop_instance` - stops an ACC server instance
+* `delete_instance` - permanently deletes an ACCWeb instance and its saved files; shared ACC Dedicated Server files are not deleted. It requires an explicit `instanceIdOrName` and never uses the default instance fallback.
 * `create_quick_race_instance` - creates a simple qualifying/race instance
 
 All tools include `outputSchema`. Successful tool calls return `structuredContent` and the same JSON serialized into a text content block for backward compatibility.
@@ -209,7 +210,7 @@ All tools include `outputSchema`. Successful tool calls return `structuredConten
 }
 ```
 
-Mutating tools include `annotations.readOnlyHint: false`; `set_instance_parameters` is also marked with `destructiveHint: true` because it overwrites existing ACC JSON values.
+Mutating tools include `annotations.readOnlyHint: false`; `set_instance_parameters` is marked with `destructiveHint: true` because it overwrites existing ACC JSON values, and `delete_instance` is marked with `destructiveHint: true` because it removes an ACCWeb instance.
 
 Read-only tools accept `instanceIdOrName` instead of requiring a strict id. It can be an ACCWeb id, exact server name, partial server name, or omitted when there is only one running/configured instance.
 

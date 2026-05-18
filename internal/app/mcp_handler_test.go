@@ -91,6 +91,7 @@ func TestMCPToolsListAnnotatesReadOnlyTools(t *testing.T) {
 		"get_instance_weather": true,
 		"get_instance_track":   true,
 		"get_instance_config":  true,
+		"delete_instance":      false,
 	}
 
 	for _, tool := range tools {
@@ -110,6 +111,40 @@ func TestMCPToolsListAnnotatesReadOnlyTools(t *testing.T) {
 			t.Fatalf("%s openWorldHint must be false because ACCWeb tools operate on local server instances", tool.Name)
 		}
 	}
+}
+
+func TestMCPToolsListMarksDeleteInstanceDestructive(t *testing.T) {
+	var h Handler
+	result := h.mcpToolsList()
+
+	tools, ok := result["tools"].([]mcpTool)
+	if !ok {
+		t.Fatalf("tools/list result must contain []mcpTool, got %T", result["tools"])
+	}
+
+	for _, tool := range tools {
+		if tool.Name != "delete_instance" {
+			continue
+		}
+		if got, ok := tool.Annotations["readOnlyHint"].(bool); !ok || got {
+			t.Fatalf("delete_instance readOnlyHint = %#v, want false", tool.Annotations["readOnlyHint"])
+		}
+		if got, ok := tool.Annotations["destructiveHint"].(bool); !ok || !got {
+			t.Fatalf("delete_instance destructiveHint = %#v, want true", tool.Annotations["destructiveHint"])
+		}
+		if got, ok := tool.Annotations["idempotentHint"].(bool); !ok || got {
+			t.Fatalf("delete_instance idempotentHint = %#v, want false", tool.Annotations["idempotentHint"])
+		}
+		if got := tool.OutputSchema["type"]; got != "object" {
+			t.Fatalf("delete_instance outputSchema.type = %#v, want object", got)
+		}
+		required, ok := tool.InputSchema["required"].([]string)
+		if !ok || len(required) != 1 || required[0] != "instanceIdOrName" {
+			t.Fatalf("delete_instance must require instanceIdOrName, got %#v", tool.InputSchema["required"])
+		}
+		return
+	}
+	t.Fatal("missing delete_instance tool")
 }
 
 func TestMCPToolsListProvidesOutputSchemas(t *testing.T) {

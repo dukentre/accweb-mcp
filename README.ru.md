@@ -164,7 +164,10 @@ MCP tools:
 * `set_instance_parameters`
 * `start_instance`
 * `stop_instance`
+* `delete_instance`
 * `create_quick_race_instance`
+
+`delete_instance` помечен как destructive tool и требует явный `instanceIdOrName`; default instance fallback для удаления не используется.
 
 Read-only tools отдают `annotations.readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: false` и `structuredContent`, поэтому совместимый MCP-клиент может не просить подтверждение для вопросов про карты/трассы, погоду и статус.
 

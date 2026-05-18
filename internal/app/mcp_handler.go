@@ -623,6 +623,14 @@ func (h *Handler) mcpToolsList() map[string]any {
 				Annotations:  mcpWriteToolAnnotations(false, true),
 			},
 			{
+				Name:         "delete_instance",
+				Title:        "Delete ACC instance",
+				Description:  "Permanently delete an ACCWeb instance and its saved configuration/log files. If it is running, ACCWeb stops it first. This does not delete the shared ACC Dedicated Server files.",
+				InputSchema:  mcpRequiredInstanceSelectorInputSchema(),
+				OutputSchema: mcpActionOutputSchema(),
+				Annotations:  mcpWriteToolAnnotations(true, false),
+			},
+			{
 				Name:        "create_quick_race_instance",
 				Title:       "Create ACC quick race",
 				Description: "Create a new simple Q/R ACC instance with common settings.",
@@ -736,6 +744,23 @@ func (h *Handler) mcpToolsCall(raw json.RawMessage) (map[string]any, error) {
 			return mcpToolErrorStructured("stop_failed", err.Error(), "Check the instance status with get_instance_status and try again.", h.mcpInstanceSummaries()), nil
 		}
 		return mcpToolStructured(map[string]any{"instance": mcpInstanceRef(srv), "action": "stopped", "success": true})
+	case "delete_instance":
+		var args mcpInstanceSelectorArgs
+		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(args.Selector()) == "" {
+			return mcpToolErrorStructured("instance_required", "delete_instance requires an explicit instanceIdOrName.", "Call list_instances, then call delete_instance with the exact instance id or server name.", h.mcpInstanceSummaries()), nil
+		}
+		srv, toolErr := h.mcpResolveInstance(args.Selector())
+		if toolErr != nil {
+			return toolErr, nil
+		}
+		instanceRef := mcpInstanceRef(srv)
+		if err := h.sm.Delete(srv.GetID()); err != nil {
+			return mcpToolErrorStructured("delete_failed", err.Error(), "Check the instance status with get_instance_status, stop it if needed, then retry delete_instance.", h.mcpInstanceSummaries()), nil
+		}
+		return mcpToolStructured(map[string]any{"instance": instanceRef, "action": "deleted", "success": true})
 	case "create_quick_race_instance":
 		var args mcpCreateQuickRaceArgs
 		if err := decodeMCPArguments(params.Arguments, &args); err != nil {
@@ -1316,6 +1341,12 @@ func mcpInstanceSelectorInputSchema() map[string]any {
 		"instanceIdOrName": schemaString("ACC instance id, exact/partial server name, or previously mentioned instance. If omitted and only one running/configured instance exists, that instance is used."),
 		"instanceId":       schemaString("Backward-compatible ACCWeb instance id. Prefer instanceIdOrName for new clients."),
 	})
+}
+
+func mcpRequiredInstanceSelectorInputSchema() map[string]any {
+	return schemaObject(map[string]any{
+		"instanceIdOrName": schemaString("Required ACC instance id, exact server name, or unambiguous partial server name."),
+	}, "instanceIdOrName")
 }
 
 func mcpTracksOutputSchema() map[string]any {
